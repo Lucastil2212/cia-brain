@@ -1,12 +1,13 @@
 [project]
 name = "cia-brain"
-version = "0.4.1"
-description = "Public government archives, live multimodal feeds, local knowledge graph, hybrid search and RAG"
+version = "0.5.0"
+description = "Public government archives, live multimodal feeds, local knowledge graph, hybrid search, Postgres accounts, and rate-limited API access"
 requires-python = "~=3.12.0"
 dependencies = [
   "aiohttp>=3.10,<4",
   "beautifulsoup4>=4.12,<5",
   "duckdb>=1.1,<2",
+  "email-validator>=2.0,<3",
   "fastapi>=0.115,<1",
   "fastembed>=0.7,<1",
   "httpx>=0.27,<1",
@@ -14,8 +15,10 @@ dependencies = [
   "numpy>=2.0,<3",
   "openpyxl>=3.1,<4",
   "pandas>=2.2,<3",
+  "psycopg[binary,pool]>=3.2,<4",
   "pyarrow>=18,<21",
   "pydantic-settings>=2.6,<3",
+  "PyJWT>=2.9,<3",
   "pypdf>=5,<7",
   "python-docx>=1.1,<2",
   "python-multipart>=0.0.12,<1",

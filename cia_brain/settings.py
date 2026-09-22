@@ -15,6 +15,19 @@ class Settings(BaseSettings):
     nats_url: str = "nats://nats:4222"
     log_level: str = "INFO"
 
+    # Postgres accounts / API keys (optional locally; required on Render)
+    database_url: str = ""
+    db_pool_max: int = 8
+    jwt_secret: str = "dev-only-change-me"
+    jwt_ttl_hours: int = 12
+    auth_required: bool = False
+    allow_registration: bool = True
+    password_scrypt_n: int = 2**14
+    api_rate_limit_per_minute: int = 60
+    api_rate_limit_per_day: int = 5000
+    anon_rate_limit_per_minute: int = 30
+    anon_rate_limit_per_day: int = 1000
+
     crawler_user_agent: str = "ManticoreEducationalArchiver/1.0"
     crawler_contact: str = ""
     allowed_hosts: str = "www.cia.gov,cia.gov"

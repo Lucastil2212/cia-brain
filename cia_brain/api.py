@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import gzip
+import json
+import logging
+import os
 import sqlite3
-from contextlib import closing
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
 import httpx
@@ -11,21 +15,48 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .auth_routes import router as auth_router
+from .db import database_configured
 from .jobs import run_job
 from .log import configure_logging
+from .middleware import AuthRateLimitMiddleware
 from .scheduler import public_status, write_job_result
 from .search import HybridSearcher
 from .settings import get_settings
 
 s = get_settings()
 configure_logging(s.log_level)
-app = FastAPI(title="CIA Brain Search & Discovery", version="0.3.0")
+log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if database_configured(s):
+        from .auth import migrate
+
+        migrate(s)
+        log.info("account schema migrated")
+    yield
+
+
+app = FastAPI(
+    title="CIA Brain Public Archive Research Catalog",
+    description=(
+        "Local library-style discovery over public U.S. government archives, "
+        "live multimodal feeds, and a source-grounded knowledge graph. "
+        "Programmatic access uses X-API-Key or Bearer JWT with per-key rate limits."
+    ),
+    version="0.5.0",
+    lifespan=lifespan,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AuthRateLimitMiddleware, settings=s)
+app.include_router(auth_router)
 _searcher: HybridSearcher | None = None
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
@@ -118,7 +149,11 @@ def graph_correlations(
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    return {
+        "ok": True,
+        "auth_required": s.auth_required,
+        "database": database_configured(s),
+    }
 
 
 @app.get("/v1/stats")
@@ -173,9 +208,45 @@ def list_documents(
 def get_document(sha256: str):
     if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256.lower()):
         raise HTTPException(400, "invalid sha256")
-    doc = searcher().document(sha256.lower())
+    digest = sha256.lower()
+    doc = searcher().document(digest)
     if not doc:
         raise HTTPException(404, "document not found")
+    # Attach multimodal fields from the normalized lake record when present.
+    normalized = s.normalized_dir / digest[:2] / f"{digest}.json.gz"
+    if normalized.exists():
+        try:
+            with gzip.open(normalized, "rt", encoding="utf-8") as stream:
+                record = json.load(stream)
+            for key in (
+                "geometry",
+                "media",
+                "measurements",
+                "modalities",
+                "agency",
+                "source_id",
+                "record_id",
+                "published_at",
+                "properties",
+                "snapshot_sha256",
+                "text",
+            ):
+                if key in record and key not in doc:
+                    doc[key] = record[key]
+                elif key in record and key == "text" and not doc.get("chunks"):
+                    doc["text"] = record[key]
+        except Exception:
+            pass
+    if s.graph_enabled:
+        try:
+            gdoc = graph().document(digest)
+            if gdoc:
+                doc["graph"] = {
+                    "entities": gdoc.get("entities", [])[:100],
+                    "metadata": gdoc.get("metadata") or {},
+                }
+        except Exception:
+            pass
     return doc
 
 
@@ -245,6 +316,12 @@ def public_config():
         "embedding_backend": s.embedding_backend,
         "embedding_model": s.embedding_model,
         "recrawl_after_hours": s.recrawl_after_hours,
+        "auth_required": s.auth_required,
+        "allow_registration": s.allow_registration,
+        "database_configured": database_configured(s),
+        "api_rate_limit_per_minute": s.api_rate_limit_per_minute,
+        "api_rate_limit_per_day": s.api_rate_limit_per_day,
+        "anon_rate_limit_per_minute": s.anon_rate_limit_per_minute,
         "job_intervals": {
             "recrawl_stale": s.job_recrawl_interval_seconds,
             "parquet_compact": s.job_parquet_compact_interval_seconds,
@@ -293,4 +370,9 @@ if UI_DIR.is_dir():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("cia_brain.api:app", host="0.0.0.0", port=8080, reload=False)
+    uvicorn.run(
+        "cia_brain.api:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "8080")),
+        reload=False,
+    )
