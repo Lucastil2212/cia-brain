@@ -314,15 +314,24 @@ backoff, and per-source errors are exposed in `GET /v1/sources` and the **Source
 Only one feeds worker should run against a given data directory.
 
 The graph is a local SQLite WAL database at `data/state/graph.sqlite`, built during extraction
-without external databases, model downloads, or hosted AI. The deterministic `rules-v2`
-extractor recognizes expanded agency aliases (CIA, FBI, NSA, ODNI, DIA, CRS, FEMA, DHS, …),
-ISO dates, acronyms, and capitalized name candidates, then attaches pattern-based relation
-labels when sentence cues match (`worked_with`, `released_by`, `reported_by`, `located_in`,
-`transferred_to`); otherwise edges remain `co_mentioned`. Ambiguous names use `named_entity`,
-not an unsupported person/location classification.
-Case-folded labels are merged; this can conflate namesakes and miss spelling variants.
-It is a baseline heuristic extractor, not a trained NER model. Character offsets and heuristic
-confidence values accompany mentions. Confidence values are not calibrated probabilities.
+without external graph databases or hosted AI. Entity extraction is controlled by `GRAPH_NER`:
+
+| Value | Behavior |
+|---|---|
+| `auto` (default) | Use local spaCy `en_core_web_sm` when installed; otherwise rules |
+| `spacy` | Require spaCy; fall back to rules only if the model cannot load |
+| `rules` | Deterministic offline gazetteer/heuristics only (`rules-v3`) |
+
+Compose images install the optional `ner` extra and download `en_core_web_sm`. Agency aliases
+always override overlapping model spans. spaCy labels map to `person`, `organization`,
+`location`, `date`, `event`, and `group`. The rules path recognizes expanded agency aliases
+(CIA, FBI, NSA, ODNI, DIA, CRS, FEMA, DHS, …), org-suffix phrases, person-like `First Last`
+candidates, a small location gazetteer, ISO dates, and acronyms, then attaches pattern-based
+relation labels when sentence cues match (`worked_with`, `released_by`, `reported_by`,
+`located_in`, `transferred_to`); otherwise edges remain `co_mentioned`. Ambiguous leftover
+tokens use `named_entity`. Case-folded labels are merged; this can conflate namesakes and miss
+spelling variants. Character offsets and heuristic confidence values accompany mentions.
+Confidence values are not calibrated probabilities.
 
 Edges retain the supporting passage and source hash, and are explicitly marked inferred.
 They do not assert employment, causality, or other facts beyond the lexical pattern cue.

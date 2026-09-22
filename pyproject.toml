@@ -1,6 +1,6 @@
 [project]
 name = "cia-brain"
-version = "0.4.0"
+version = "0.4.1"
 description = "Public government archives, live multimodal feeds, local knowledge graph, hybrid search and RAG"
 requires-python = ">=3.12"
 dependencies = [
@@ -28,6 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<9", "ruff>=0.8,<1"]
+ner = ["spacy>=3.7,<4"]
 
 [project.scripts]
 cia-brain = "cia_brain.cli:main"

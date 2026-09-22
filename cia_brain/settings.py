@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     feed_max_bytes: int = 20_000_000
     graph_enabled: bool = True
     graph_spatial_radius_km: float = 250.0
+    graph_ner: str = "auto"  # auto | rules | spacy
     job_graph_rebuild_interval_seconds: int = 0
 
     crawl_delay_seconds: float = 10.0

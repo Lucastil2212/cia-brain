@@ -344,7 +344,7 @@ async function loadSources() {
 async function loadGraph() {
   try {
     const [stats, data] = await Promise.all([api("/v1/graph/stats"), api(`/v1/graph/entities?q=${encodeURIComponent($("#graph-q").value)}`)]);
-    $("#graph-stats").textContent = `${stats.documents} documents · ${stats.entities} entities · ${stats.edges} evidence links`;
+    $("#graph-stats").textContent = `${stats.documents} documents · ${stats.entities} entities · ${stats.edges} evidence links · NER ${stats.ner_backend || "rules"}`;
     $("#graph-entities").innerHTML = data.entities.map(e => `<article class="result"><button type="button" data-entity="${escapeHtml(e.id)}">${escapeHtml(e.label)}</button><p>${escapeHtml(e.kind)} · ${e.documents} documents</p></article>`).join("") || "No entities yet. Ingest documents or run graph_rebuild for the existing archive.";
   } catch (err) { $("#graph-stats").textContent = err.message; }
 }

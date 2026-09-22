@@ -36,6 +36,40 @@ ENTITY_RE = re.compile(
     r"\b\d{4}-\d{2}-\d{2}\b|\b[A-Z][A-Z0-9-]{1,14}\b|"
     r"\b(?:[A-Z][a-z]+(?:\s+|$)){2,5}|\bU\.S\."
 )
+ORG_SUFFIX_RE = re.compile(
+    r"\b(?:[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,4}\s+)?"
+    r"(?:Agency|Department|Committee|Bureau|Office|Administration|Service|"
+    r"Institute|Center|Centre|Commission|Directorate|Authority|Council)\b"
+)
+PERSON_RE = re.compile(r"\b([A-Z][a-z]{1,20})\s+([A-Z][a-z]{1,20})\b")
+PERSON_STOP = {
+    "the", "new", "united", "national", "central", "federal", "general", "state",
+    "north", "south", "east", "west", "project", "operation", "director", "office",
+}
+LOCATION_GAZETTEER = {
+    "Washington": "location",
+    "Washington, D.C.": "location",
+    "New York": "location",
+    "Langley": "location",
+    "Fort Meade": "location",
+    "Moscow": "location",
+    "Beijing": "location",
+    "Havana": "location",
+    "Tehran": "location",
+    "Baghdad": "location",
+    "Kabul": "location",
+    "Saigon": "location",
+    "Berlin": "location",
+    "London": "location",
+    "Paris": "location",
+    "Tokyo": "location",
+    "California": "location",
+    "Virginia": "location",
+    "Maryland": "location",
+    "Texas": "location",
+    "Alaska": "location",
+    "Hawaii": "location",
+}
 SENTENCE_RE = re.compile(r"[^\n.!?]+(?:[.!?](?!\s+[a-z]))?")
 
 # Ordered patterns: first matching typed relation wins for a subject/object pair in a sentence.
@@ -47,48 +81,188 @@ RELATION_PATTERNS = (
     (re.compile(r"\b(?:transferred to|provided to|shared with)\b", re.I), "transferred_to"),
 )
 
+SPACY_LABELS = {
+    "PERSON": "person",
+    "ORG": "organization",
+    "GPE": "location",
+    "LOC": "location",
+    "FAC": "location",
+    "DATE": "date",
+    "EVENT": "event",
+    "NORP": "group",
+}
+
+_spacy_nlp = None
+_spacy_failed = False
+
 
 def entity_id(label: str, kind: str) -> str:
     return hashlib.sha256(f"{kind}:{label.casefold()}".encode()).hexdigest()[:24]
 
 
-def extract_entities(text: str) -> list[dict]:
-    """Deterministic offline candidates with exact character offsets; no model download."""
+def _overlaps(span: tuple[int, int], occupied: list[tuple[int, int]]) -> bool:
+    a, b = span
+    return any(a < y and b > x for x, y in occupied)
+
+
+def _alias_mentions(text: str) -> list[tuple]:
+    occupied: list[tuple[int, int]] = []
     candidates = []
-    occupied = []
-    # Longer alias labels first so "Central Intelligence Agency" wins over partials.
-    aliases = sorted(ALIASES.items(), key=lambda kv: -len(kv[1][0]))
+    aliases = sorted(ALIASES.items(), key=lambda kv: -max(len(kv[0]), len(kv[1][0])))
     for short, (label, kind) in aliases:
         for match in re.finditer(
             r"(?<!\w)(?:" + re.escape(label) + "|" + re.escape(short) + r")(?!\w)",
             text,
             re.IGNORECASE,
         ):
-            if any(a <= match.start() < b for a, b in occupied):
+            if _overlaps(match.span(), occupied):
                 continue
             occupied.append(match.span())
-            candidates.append((match, label, kind, 0.95))
+            candidates.append((match.start(), match.end(), label, kind, 0.95, "alias"))
+    for place, kind in sorted(LOCATION_GAZETTEER.items(), key=lambda kv: -len(kv[0])):
+        for match in re.finditer(r"(?<!\w)" + re.escape(place) + r"(?!\w)", text):
+            if _overlaps(match.span(), occupied):
+                continue
+            occupied.append(match.span())
+            candidates.append((match.start(), match.end(), place, kind, 0.9, "gazetteer"))
+    return candidates
+
+
+def extract_entities_rules(text: str) -> list[dict]:
+    """Deterministic offline candidates with exact character offsets."""
+    candidates = _alias_mentions(text)
+    occupied = [(a, b) for a, b, *_ in candidates]
+    for match in ORG_SUFFIX_RE.finditer(text):
+        if _overlaps(match.span(), occupied):
+            continue
+        label = match.group().strip()
+        occupied.append(match.span())
+        candidates.append((match.start(), match.end(), label, "organization", 0.75, "rules-v3"))
+    for match in PERSON_RE.finditer(text):
+        if _overlaps(match.span(), occupied):
+            continue
+        first, last = match.group(1), match.group(2)
+        if first.casefold() in PERSON_STOP or last.casefold() in PERSON_STOP:
+            continue
+        occupied.append(match.span())
+        candidates.append(
+            (match.start(), match.end(), f"{first} {last}", "person", 0.65, "rules-v3")
+        )
     for match in ENTITY_RE.finditer(text):
-        if any(match.start() < b and match.end() > a for a, b in occupied):
+        if _overlaps(match.span(), occupied):
             continue
         label = match.group().strip()
         kind = "date" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", label) else "named_entity"
-        candidates.append((match, label, kind, 0.55))
+        end = match.start() + len(match.group().rstrip())
+        occupied.append((match.start(), end))
+        candidates.append(
+            (match.start(), end, label, kind, 0.55, "rules-v3")
+        )
+    return _finalize(candidates)
+
+
+def _load_spacy():
+    global _spacy_nlp, _spacy_failed
+    if _spacy_nlp is not None or _spacy_failed:
+        return _spacy_nlp
+    try:
+        import spacy
+
+        try:
+            _spacy_nlp = spacy.load("en_core_web_sm", disable=["tagger", "parser", "lemmatizer"])
+        except OSError:
+            from spacy.cli import download
+
+            download("en_core_web_sm")
+            _spacy_nlp = spacy.load("en_core_web_sm", disable=["tagger", "parser", "lemmatizer"])
+        if "ner" not in _spacy_nlp.pipe_names:
+            _spacy_failed = True
+            _spacy_nlp = None
+    except Exception:
+        _spacy_failed = True
+        _spacy_nlp = None
+    return _spacy_nlp
+
+
+def extract_entities_spacy(text: str) -> list[dict]:
+    """Local spaCy NER; agency aliases still override overlapping spans."""
+    nlp = _load_spacy()
+    if nlp is None:
+        return extract_entities_rules(text)
+    # spaCy has a practical doc length ceiling; chunk long FOIA text.
+    max_chars = 900_000
+    chunks = [text[i : i + max_chars] for i in range(0, len(text), max_chars)] or [text]
+    spacy_hits = []
+    offset = 0
+    for chunk in chunks:
+        doc = nlp(chunk)
+        for ent in doc.ents:
+            kind = SPACY_LABELS.get(ent.label_)
+            if not kind:
+                continue
+            label = ent.text.strip()
+            if not label or len(label) < 2:
+                continue
+            start = offset + ent.start_char
+            end = offset + ent.end_char
+            spacy_hits.append((start, end, label, kind, 0.8, "spacy-sm"))
+        offset += len(chunk)
+    aliases = _alias_mentions(text)
+    occupied = [(a, b) for a, b, *_ in aliases]
+    merged = list(aliases)
+    for hit in spacy_hits:
+        if _overlaps((hit[0], hit[1]), occupied):
+            continue
+        occupied.append((hit[0], hit[1]))
+        merged.append(hit)
+    # Fill residual acronyms/dates the model often misses.
+    for match in re.finditer(r"\b\d{4}-\d{2}-\d{2}\b|\b[A-Z]{2,8}\b", text):
+        if _overlaps(match.span(), occupied):
+            continue
+        label = match.group()
+        kind = "date" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", label) else "named_entity"
+        if kind == "named_entity" and label in ALIASES:
+            continue
+        occupied.append(match.span())
+        merged.append((match.start(), match.end(), label, kind, 0.55, "rules-v3"))
+    return _finalize(merged)
+
+
+def _finalize(candidates: list[tuple]) -> list[dict]:
     return sorted(
         [
             {
                 "id": entity_id(label, kind),
                 "label": label,
                 "kind": kind,
-                "start": match.start(),
-                "end": match.start() + len(match.group().rstrip()),
+                "start": start,
+                "end": end,
                 "confidence": confidence,
-                "method": "rules-v2",
+                "method": method,
             }
-            for match, label, kind, confidence in candidates
+            for start, end, label, kind, confidence, method in candidates
         ],
         key=lambda x: x["start"],
     )
+
+
+def resolve_ner_method(requested: str = "auto") -> str:
+    name = (requested or "auto").strip().lower()
+    if name == "rules":
+        return "rules"
+    if name == "spacy":
+        return "spacy" if _load_spacy() is not None else "rules"
+    if name == "auto":
+        return "spacy" if _load_spacy() is not None else "rules"
+    raise ValueError(f"Unknown graph NER method: {requested}")
+
+
+def extract_entities(text: str, method: str = "auto") -> list[dict]:
+    """Extract entities via spaCy when available, otherwise deterministic rules."""
+    resolved = resolve_ner_method(method)
+    if resolved == "spacy":
+        return extract_entities_spacy(text)
+    return extract_entities_rules(text)
 
 
 def infer_relation(sentence: str, subject_label: str, object_label: str) -> str:
@@ -138,7 +312,9 @@ def point_coords(geometry) -> tuple[float, float] | None:
 
 class KnowledgeGraph:
     def __init__(self, settings):
+        self.settings = settings
         self.path = settings.state_dir / "graph.sqlite"
+        self.ner_method = getattr(settings, "graph_ner", "auto")
         with self.connect() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS documents(
@@ -200,7 +376,9 @@ class KnowledgeGraph:
     def ingest(self, doc: dict):
         text = doc.get("text", "")[:2_000_000]
         sha = doc["source_sha256"]
-        entities = extract_entities(text)
+        resolved = resolve_ner_method(self.ner_method)
+        entities = extract_entities(text, method=resolved)
+        methods = sorted({e["method"] for e in entities}) or [resolved]
         metadata = {
             k: doc[k]
             for k in (
@@ -214,7 +392,8 @@ class KnowledgeGraph:
             if k in doc
         }
         metadata.update(
-            extractor="rules-v2",
+            extractor="+".join(methods),
+            ner_backend=resolved,
             analyzed_chars=len(text),
             truncated=len(doc.get("text", "")) > len(text),
         )
@@ -412,4 +591,5 @@ class KnowledgeGraph:
                 "SELECT count(*) FROM edges WHERE relation<>'co_mentioned'"
             ).fetchone()[0]
             base["typed_edges"] = typed
+            base["ner_backend"] = resolve_ner_method(self.ner_method)
             return base
