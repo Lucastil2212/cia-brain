@@ -1,0 +1,100 @@
+name: cia-brain
+
+x-app: &app
+  build: .
+  env_file: .env
+  volumes:
+    - ./data:/data
+  restart: unless-stopped
+  depends_on:
+    nats:
+      condition: service_healthy
+
+services:
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    volumes:
+      - nats-data:/data
+    ports:
+      - "127.0.0.1:8222:8222"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  crawler:
+    <<: *app
+    command: ["cia_brain.worker_crawler"]
+
+  feeds:
+    <<: *app
+    command: ["cia_brain.feeds"]
+
+  extractor:
+    <<: *app
+    command: ["cia_brain.worker_extractor"]
+
+  indexer:
+    <<: *app
+    command: ["cia_brain.worker_indexer"]
+
+  api:
+    <<: *app
+    command: ["cia_brain.api"]
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  scheduler:
+    <<: *app
+    command: ["cia_brain.scheduler"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama:0.34.1
+    profiles: ["ai"]
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    restart: unless-stopped
+
+  model-init:
+    image: curlimages/curl:latest
+    profiles: ["ai"]
+    depends_on:
+      - ollama
+    env_file: .env
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until curl -fsS http://ollama:11434/api/tags >/dev/null; do sleep 2; done
+        curl -fsS http://ollama:11434/api/pull -d "{\"model\":\"$${LLM_MODEL}\",\"stream\":false}"
+        if [ "$${EMBEDDING_BACKEND}" = "ollama" ]; then
+          curl -fsS http://ollama:11434/api/pull -d "{\"model\":\"$${OLLAMA_EMBED_MODEL}\",\"stream\":false}"
+        fi
+
+  agent:
+    <<: *app
+    profiles: ["ai"]
+    command: ["cia_brain.agent"]
+    ports:
+      - "8090:8090"
+    depends_on:
+      api:
+        condition: service_healthy
+      model-init:
+        condition: service_completed_successfully
+
+volumes:
+  nats-data:
+  ollama-data:

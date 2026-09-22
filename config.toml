@@ -1,0 +1,16 @@
+[project]
+name = "cia-brain"
+source = "https://www.cia.gov/"
+purpose = "Public-source archival, research, education, and source-grounded discovery"
+
+[lake]
+raw = "/data/raw"
+normalized = "/data/normalized"
+parquet = "/data/parquet"
+state = "/data/state"
+
+[search]
+algorithm = "weighted_rrf"
+lexical = "sqlite_fts5_bm25"
+vector = "usearch_hnsw_cosine"
+analytics = "duckdb_over_parquet"
