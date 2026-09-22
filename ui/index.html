@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CIA Brain — Search & Discovery</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+  <header class="topbar">
+    <a class="brand" href="#search">CIA Brain</a>
+    <nav class="nav">
+      <button type="button" data-view="search" class="nav-btn is-active">Search</button>
+      <button type="button" data-view="reason" class="nav-btn">Reason</button>
+      <button type="button" data-view="browse" class="nav-btn">Browse</button>
+      <button type="button" data-view="graph" class="nav-btn">Knowledge graph</button>
+      <button type="button" data-view="sources" class="nav-btn">Sources</button>
+      <button type="button" data-view="pipeline" class="nav-btn">Pipeline</button>
+    </nav>
+    <div class="top-meta" id="top-meta">loading lake…</div>
+  </header>
+
+  <main>
+    <section id="view-search" class="view is-active">
+      <div class="hero">
+        <p class="brand-mark">CIA Brain</p>
+        <h1>Search the local archive</h1>
+        <p class="lede">Hybrid lexical and semantic discovery over public government archives and live feeds in your open data lake.</p>
+        <form id="search-form" class="search-form" autocomplete="off">
+          <label class="sr-only" for="q">Query</label>
+          <input id="q" name="q" type="search" placeholder="e.g. U-2 reconnaissance overflights" required />
+          <button type="submit">Search</button>
+        </form>
+        <div class="filters">
+          <label>MIME <select id="mime-filter"><option value="">Any</option></select></label>
+          <label>Results <select id="top-k"><option>8</option><option selected>12</option><option>24</option><option>40</option></select></label>
+        </div>
+      </div>
+      <div id="search-status" class="status" hidden></div>
+      <div id="results" class="results"></div>
+    </section>
+
+    <section id="view-sources" class="view">
+      <div class="panel-head"><h2>Public intelligence sources</h2><p>Archive collections and polling feeds. Status reflects local ingestion, not upstream availability guarantees.</p></div>
+      <div id="source-list" class="results"></div>
+    </section>
+    <section id="view-graph" class="view">
+      <div class="panel-head"><h2>Explore entities and connections</h2><p>Connections are candidate co-mentions supported by source passages. Shared entities suggest correlations, not causation.</p></div>
+      <form id="graph-form" class="search-form"><label for="graph-q">Entity</label><input id="graph-q" placeholder="e.g. NASA" /><button>Find</button></form>
+      <div id="graph-stats" class="status"></div><div id="graph-entities" class="results"></div><div id="graph-detail" class="results"></div>
+    </section>
+
+    <section id="view-reason" class="view">
+      <div class="panel-head">
+        <h2>Reason with a local agent</h2>
+        <p>Plan → retrieve → synthesize using your Ollama model over hybrid search evidence.</p>
+      </div>
+      <form id="reason-form" class="stack-form">
+        <label for="reason-q">Question</label>
+        <textarea id="reason-q" rows="4" placeholder="What do the archived documents say about Project AZORIAN?" required></textarea>
+        <div class="row">
+          <label>Mode
+            <select id="reason-mode">
+              <option value="reason">Multi-step reason</option>
+              <option value="chat">Single-pass chat</option>
+              <option value="lesson">Product: lesson</option>
+              <option value="study-guide">Product: study guide</option>
+              <option value="brief">Product: brief</option>
+              <option value="timeline">Product: timeline</option>
+              <option value="quiz">Product: quiz</option>
+            </select>
+          </label>
+          <button type="submit">Run agent</button>
+        </div>
+      </form>
+      <div id="reason-status" class="status" hidden></div>
+      <article id="reason-out" class="answer" hidden></article>
+      <div id="reason-steps" class="steps" hidden></div>
+      <div id="reason-sources" class="results"></div>
+    </section>
+
+    <section id="view-browse" class="view">
+      <div class="panel-head">
+        <h2>Browse documents</h2>
+        <p>Paginated lake inventory with optional title/URL filter.</p>
+      </div>
+      <form id="browse-form" class="row">
+        <input id="browse-q" type="search" placeholder="Filter title or URL" />
+        <button type="submit">Browse</button>
+      </form>
+      <div id="browse-status" class="status" hidden></div>
+      <div id="browse-list" class="doc-list"></div>
+      <div class="pager">
+        <button type="button" id="browse-prev" disabled>Previous</button>
+        <span id="browse-page">—</span>
+        <button type="button" id="browse-next" disabled>Next</button>
+      </div>
+      <aside id="doc-detail" class="doc-detail" hidden></aside>
+    </section>
+
+    <section id="view-pipeline" class="view">
+      <div class="panel-head">
+        <h2>ETL pipeline & intervals</h2>
+        <p>NATS workers handle continuous ingest. Interval jobs cover recrawl, Parquet compaction, seed refresh, and health snapshots — also expressible as an Airflow DAG.</p>
+      </div>
+      <div id="pipeline-stats" class="stat-grid"></div>
+      <div id="job-list" class="job-list"></div>
+      <pre id="job-log" class="job-log" hidden></pre>
+    </section>
+  </main>
+
+  <dialog id="doc-dialog">
+    <form method="dialog" class="dialog-head">
+      <strong id="dialog-title">Document</strong>
+      <button value="close">Close</button>
+    </form>
+    <div id="dialog-body"></div>
+  </dialog>
+
+  <script src="/assets/app.js" type="module"></script>
+</body>
+</html>
