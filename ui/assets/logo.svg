@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="CIA Brain">
+  <rect width="64" height="64" rx="4" fill="#1a2e28"/>
+  <path fill="#c5a35a" d="M12 16h40v4H12zm0 8h40v32H12zm4 4v24h32V28z"/>
+  <path fill="#e8ece8" d="M22 34h20v2H22zm0 6h16v2H22zm0 6h12v2H22z"/>
+  <circle cx="44" cy="46" r="5" fill="none" stroke="#7eb8a8" stroke-width="2"/>
+  <path stroke="#7eb8a8" stroke-width="2" d="M47.5 49.5 52 54"/>
+</svg>

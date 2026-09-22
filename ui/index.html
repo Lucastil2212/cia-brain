@@ -3,64 +3,152 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CIA Brain — Search & Discovery</title>
+  <title>CIA Brain — Public Archive Research Catalog</title>
+  <meta name="description" content="Local research catalog for public U.S. government archives, FOIA releases, live open-data feeds, and a source-grounded knowledge graph. Hybrid search over your open data lake." />
+  <meta name="application-name" content="CIA Brain" />
+  <meta name="theme-color" content="#1a2e28" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="CIA Brain — Public Archive Research Catalog" />
+  <meta property="og:description" content="Search declassified collections, live multimodal feeds, and entity correlations in a local open-data lake." />
+  <meta property="og:image" content="/assets/logo.svg" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="CIA Brain — Public Archive Research Catalog" />
+  <meta name="twitter:description" content="Local library-style discovery over public government archives and open intelligence feeds." />
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/assets/logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Literata:opsz,wght@7..72,400;7..72,500;7..72,600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/assets/styles.css" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "CIA Brain",
+    "alternateName": "CIA Brain Public Archive Research Catalog",
+    "applicationCategory": "EducationalApplication",
+    "operatingSystem": "Local Docker / browser",
+    "description": "Local research catalog for public U.S. government archives, FOIA releases, live open-data feeds, and a source-grounded knowledge graph.",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
 </head>
 <body>
-  <div class="atmosphere" aria-hidden="true"></div>
+  <div class="shelf" aria-hidden="true"></div>
   <header class="topbar">
-    <a class="brand" href="#search">CIA Brain</a>
-    <nav class="nav">
-      <button type="button" data-view="search" class="nav-btn is-active">Search</button>
-      <button type="button" data-view="reason" class="nav-btn">Reason</button>
-      <button type="button" data-view="browse" class="nav-btn">Browse</button>
+    <a class="brand" href="#catalog" data-view-link="search">
+      <img src="/assets/logo.svg" width="40" height="40" alt="" class="brand-mark-img" />
+      <span class="brand-text">
+        <span class="brand-name">CIA Brain</span>
+        <span class="brand-sub">Research Catalog</span>
+      </span>
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <button type="button" data-view="search" class="nav-btn is-active">Catalog</button>
       <button type="button" data-view="graph" class="nav-btn">Knowledge graph</button>
-      <button type="button" data-view="sources" class="nav-btn">Sources</button>
-      <button type="button" data-view="pipeline" class="nav-btn">Pipeline</button>
+      <button type="button" data-view="gallery" class="nav-btn">Multimodal</button>
+      <button type="button" data-view="sources" class="nav-btn">Collections</button>
+      <button type="button" data-view="browse" class="nav-btn">Holdings</button>
+      <button type="button" data-view="reason" class="nav-btn">Reading room</button>
+      <button type="button" data-view="account" class="nav-btn">Account</button>
+      <button type="button" data-view="pipeline" class="nav-btn">Stacks</button>
     </nav>
-    <div class="top-meta" id="top-meta">loading lake…</div>
+    <div class="top-meta" id="top-meta">opening the stacks…</div>
   </header>
 
   <main>
     <section id="view-search" class="view is-active">
       <div class="hero">
-        <p class="brand-mark">CIA Brain</p>
-        <h1>Search the local archive</h1>
-        <p class="lede">Hybrid lexical and semantic discovery over public government archives and live feeds in your open data lake.</p>
+        <p class="eyebrow">Special collections · local open data lake</p>
+        <h1 class="brand-hero">CIA Brain</h1>
+        <p class="lede">A library-style finding aid over public agency archives, FOIA reading rooms, and live multimodal open sources — with hybrid search and provenance on every result.</p>
         <form id="search-form" class="search-form" autocomplete="off">
-          <label class="sr-only" for="q">Query</label>
-          <input id="q" name="q" type="search" placeholder="e.g. U-2 reconnaissance overflights" required />
-          <button type="submit">Search</button>
+          <label class="sr-only" for="q">Catalog query</label>
+          <input id="q" name="q" type="search" placeholder="Search titles, programs, places, agencies…" required />
+          <button type="submit">Search catalog</button>
         </form>
         <div class="filters">
-          <label>MIME <select id="mime-filter"><option value="">Any</option></select></label>
+          <label>Format <select id="mime-filter"><option value="">Any format</option></select></label>
           <label>Results <select id="top-k"><option>8</option><option selected>12</option><option>24</option><option>40</option></select></label>
         </div>
+      </div>
+      <div id="catalog-viz" class="viz-row" hidden>
+        <figure class="viz-panel">
+          <figcaption>Holdings by format</figcaption>
+          <div id="mime-chart" class="chart" role="img" aria-label="MIME distribution chart"></div>
+        </figure>
+        <figure class="viz-panel">
+          <figcaption>Collection modalities</figcaption>
+          <div id="modality-chart" class="chart" role="img" aria-label="Modality distribution chart"></div>
+        </figure>
       </div>
       <div id="search-status" class="status" hidden></div>
       <div id="results" class="results"></div>
     </section>
 
-    <section id="view-sources" class="view">
-      <div class="panel-head"><h2>Public intelligence sources</h2><p>Archive collections and polling feeds. Status reflects local ingestion, not upstream availability guarantees.</p></div>
-      <div id="source-list" class="results"></div>
-    </section>
     <section id="view-graph" class="view">
-      <div class="panel-head"><h2>Explore entities and connections</h2><p>Connections are candidate co-mentions supported by source passages. Shared entities suggest correlations, not causation.</p></div>
-      <form id="graph-form" class="search-form"><label for="graph-q">Entity</label><input id="graph-q" placeholder="e.g. NASA" /><button>Find</button></form>
-      <div id="graph-stats" class="status"></div><div id="graph-entities" class="results"></div><div id="graph-detail" class="results"></div>
+      <div class="panel-head">
+        <h2>Knowledge graph</h2>
+        <p>Interactive entity neighborhoods. Edges are inferred from source passages — candidates for research, not established facts.</p>
+      </div>
+      <form id="graph-form" class="search-form">
+        <label class="sr-only" for="graph-q">Entity</label>
+        <input id="graph-q" placeholder="Find an entity, e.g. NASA or Dulles" />
+        <button type="submit">Look up</button>
+      </form>
+      <div id="graph-stats" class="status"></div>
+      <div class="graph-layout">
+        <div class="graph-stage">
+          <canvas id="graph-canvas" width="900" height="520" aria-label="Interactive knowledge graph"></canvas>
+          <p class="graph-hint">Drag nodes · scroll to zoom · click a node for evidence</p>
+        </div>
+        <aside class="graph-side">
+          <div id="graph-entities" class="entity-list"></div>
+          <div id="graph-detail" class="evidence-panel"></div>
+        </aside>
+      </div>
+      <div id="graph-kind-chart" class="chart chart-wide" role="img" aria-label="Entity kinds chart"></div>
+    </section>
+
+    <section id="view-gallery" class="view">
+      <div class="panel-head">
+        <h2>Multimodal gallery</h2>
+        <p>Browse image, geospatial, telemetry, and media-reference holdings from live feeds and archives.</p>
+      </div>
+      <div class="filters gallery-filters">
+        <label>Modality
+          <select id="gallery-modality">
+            <option value="">All multimodal</option>
+            <option value="image">Images</option>
+            <option value="geospatial">Geospatial</option>
+            <option value="telemetry">Telemetry</option>
+            <option value="video">Video refs</option>
+            <option value="audio">Audio refs</option>
+          </select>
+        </label>
+        <button type="button" id="gallery-refresh">Refresh shelf</button>
+      </div>
+      <div id="gallery-status" class="status" hidden></div>
+      <div id="gallery-grid" class="gallery-grid"></div>
+    </section>
+
+    <section id="view-sources" class="view">
+      <div class="panel-head">
+        <h2>Collections</h2>
+        <p>Curated public archives and polling feeds. Status reflects local ingestion, not upstream availability.</p>
+      </div>
+      <div id="source-viz" class="viz-row"></div>
+      <div id="source-list" class="collection-list"></div>
     </section>
 
     <section id="view-reason" class="view">
       <div class="panel-head">
-        <h2>Reason with a local agent</h2>
-        <p>Plan → retrieve → synthesize using your Ollama model over hybrid search evidence.</p>
+        <h2>Reading room</h2>
+        <p>Ask a local agent to plan, retrieve, and synthesize from catalog evidence. Citations stay grounded in retrieved sources.</p>
       </div>
       <form id="reason-form" class="stack-form">
-        <label for="reason-q">Question</label>
+        <label for="reason-q">Research question</label>
         <textarea id="reason-q" rows="4" placeholder="What do the archived documents say about Project AZORIAN?" required></textarea>
         <div class="row">
           <label>Mode
@@ -74,7 +162,7 @@
               <option value="quiz">Product: quiz</option>
             </select>
           </label>
-          <button type="submit">Run agent</button>
+          <button type="submit">Consult catalog</button>
         </div>
       </form>
       <div id="reason-status" class="status" hidden></div>
@@ -85,8 +173,8 @@
 
     <section id="view-browse" class="view">
       <div class="panel-head">
-        <h2>Browse documents</h2>
-        <p>Paginated lake inventory with optional title/URL filter.</p>
+        <h2>Holdings</h2>
+        <p>Paginated inventory of normalized documents in the lake.</p>
       </div>
       <form id="browse-form" class="row">
         <input id="browse-q" type="search" placeholder="Filter title or URL" />
@@ -99,19 +187,68 @@
         <span id="browse-page">—</span>
         <button type="button" id="browse-next" disabled>Next</button>
       </div>
-      <aside id="doc-detail" class="doc-detail" hidden></aside>
+    </section>
+
+    <section id="view-account" class="view">
+      <div class="panel-head">
+        <h2>Researcher account</h2>
+        <p>Register for a catalog account, then mint an API key for rate-limited programmatic access (<code>X-API-Key</code>).</p>
+      </div>
+      <div id="account-status" class="status" hidden></div>
+      <div class="account-grid">
+        <form id="auth-form" class="stack-form">
+          <label for="auth-email">Email</label>
+          <input id="auth-email" type="email" required autocomplete="username" />
+          <label for="auth-password">Password</label>
+          <input id="auth-password" type="password" required minlength="10" autocomplete="current-password" />
+          <label for="auth-name">Display name (register only)</label>
+          <input id="auth-name" type="text" maxlength="120" autocomplete="nickname" />
+          <div class="row">
+            <button type="submit" id="auth-login">Sign in</button>
+            <button type="button" id="auth-register" class="pager">Create account</button>
+            <button type="button" id="auth-logout" class="pager">Sign out</button>
+          </div>
+        </form>
+        <div class="stack-form">
+          <h3>API keys</h3>
+          <p class="lede" style="margin:0">Keys are shown once at creation. Prefer keys for scripts and integrations.</p>
+          <div class="row">
+            <input id="key-name" type="text" placeholder="Key name" value="default" />
+            <button type="button" id="key-create">Mint key</button>
+          </div>
+          <pre id="key-secret" class="job-log" hidden></pre>
+          <div id="key-list" class="collection-list"></div>
+          <h3>Programmatic example</h3>
+          <pre class="job-log">curl -s -H "X-API-Key: YOUR_KEY" \
+  -H "content-type: application/json" \
+  -d '{"query":"U-2","top_k":5}' \
+  https://YOUR_HOST/v1/search</pre>
+        </div>
+      </div>
     </section>
 
     <section id="view-pipeline" class="view">
       <div class="panel-head">
-        <h2>ETL pipeline & intervals</h2>
-        <p>NATS workers handle continuous ingest. Interval jobs cover recrawl, Parquet compaction, seed refresh, and health snapshots — also expressible as an Airflow DAG.</p>
+        <h2>Stacks &amp; intervals</h2>
+        <p>NATS workers handle continuous ingest. Interval jobs cover recrawl, compaction, seed refresh, and health.</p>
       </div>
       <div id="pipeline-stats" class="stat-grid"></div>
+      <div id="pipeline-chart" class="chart chart-wide" role="img" aria-label="Pipeline counters"></div>
       <div id="job-list" class="job-list"></div>
       <pre id="job-log" class="job-log" hidden></pre>
     </section>
   </main>
+
+  <footer class="site-footer">
+    <div class="footer-brand">
+      <img src="/assets/logo.svg" width="28" height="28" alt="" />
+      <div>
+        <strong>CIA Brain</strong>
+        <span>Educational research catalog · public sources only · robots-aware</span>
+      </div>
+    </div>
+    <p>Connections and correlations are hypotheses supported by archived passages. Verify claims against original government sources.</p>
+  </footer>
 
   <dialog id="doc-dialog">
     <form method="dialog" class="dialog-head">
