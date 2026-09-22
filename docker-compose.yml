@@ -25,36 +25,73 @@ services:
       retries: 20
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cia
+      POSTGRES_PASSWORD: cia
+      POSTGRES_DB: cia_brain
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cia -d cia_brain"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   crawler:
     <<: *app
-    command: ["cia_brain.worker_crawler"]
+    command: ["python", "-m", "cia_brain.worker_crawler"]
 
   feeds:
     <<: *app
-    command: ["cia_brain.feeds"]
+    command: ["python", "-m", "cia_brain.feeds"]
 
   extractor:
     <<: *app
-    command: ["cia_brain.worker_extractor"]
+    command: ["python", "-m", "cia_brain.worker_extractor"]
 
   indexer:
     <<: *app
-    command: ["cia_brain.worker_indexer"]
+    command: ["python", "-m", "cia_brain.worker_indexer"]
 
   api:
     <<: *app
-    command: ["cia_brain.api"]
+    command: ["python", "-m", "cia_brain.api"]
     ports:
       - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://cia:cia@postgres:5432/cia_brain
+      JWT_SECRET: local-dev-jwt-secret-change-me
+      AUTH_REQUIRED: "false"
+      ALLOW_REGISTRATION: "true"
+    depends_on:
+      nats:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 5s
       retries: 20
 
+  migrate:
+    <<: *app
+    profiles: ["migrate"]
+    command: ["python", "-m", "cia_brain.migrate"]
+    environment:
+      DATABASE_URL: postgresql://cia:cia@postgres:5432/cia_brain
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   scheduler:
     <<: *app
-    command: ["cia_brain.scheduler"]
+    command: ["python", "-m", "cia_brain.scheduler"]
     depends_on:
       api:
         condition: service_healthy
@@ -86,7 +123,7 @@ services:
   agent:
     <<: *app
     profiles: ["ai"]
-    command: ["cia_brain.agent"]
+    command: ["python", "-m", "cia_brain.agent"]
     ports:
       - "8090:8090"
     depends_on:
@@ -98,3 +135,4 @@ services:
 volumes:
   nats-data:
   ollama-data:
+  pg-data:

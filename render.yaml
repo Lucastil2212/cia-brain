@@ -1,0 +1,67 @@
+# CIA Brain — Render Blueprint (Pro)
+# Deploys managed Postgres + one all-in-one web service (API, UI, NATS, ingest workers)
+# with a persistent lake disk. Disks cannot be shared across services on Render.
+
+databases:
+  - name: cia-brain-db
+    plan: basic-1gb
+    postgresMajorVersion: "16"
+    ipAllowList: []  # private; services connect over Render private network
+
+services:
+  - type: web
+    name: cia-brain
+    runtime: docker
+    plan: standard
+    region: oregon
+    healthCheckPath: /healthz
+    dockerCommand: /app/scripts/start-render.sh
+    disk:
+      name: cia-brain-lake
+      mountPath: /data
+      sizeGB: 50
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: NATS_URL
+        value: nats://127.0.0.1:4222
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cia-brain-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AUTH_REQUIRED
+        value: "true"
+      - key: ALLOW_REGISTRATION
+        value: "true"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: GRAPH_ENABLED
+        value: "true"
+      - key: GRAPH_NER
+        value: auto
+      - key: ARCHIVE_SOURCES
+        value: fbi,nsa,nara,state,odni,dia,crs
+      - key: LIVE_SOURCES
+        value: usgs,nws,swpc,goes,nasa,nara_catalog,state_rss,fema_rss,odni_rss
+      - key: API_RATE_LIMIT_PER_MINUTE
+        value: "60"
+      - key: API_RATE_LIMIT_PER_DAY
+        value: "5000"
+      - key: ANON_RATE_LIMIT_PER_MINUTE
+        value: "20"
+      - key: ANON_RATE_LIMIT_PER_DAY
+        value: "500"
+      - key: CRAWLER_USER_AGENT
+        value: ManticoreEducationalArchiver/1.0
+      - key: CRAWLER_CONTACT
+        sync: false
+      - key: MIN_FREE_DISK_GB
+        value: "2"
+      - key: EMBEDDING_BACKEND
+        value: fastembed
+      - key: EMBEDDING_MODEL
+        value: BAAI/bge-small-en-v1.5
+      - key: OCR_ENABLED
+        value: "false"

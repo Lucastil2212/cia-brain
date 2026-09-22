@@ -55,6 +55,17 @@ docker compose up -d --build nats indexer extractor crawler feeds api scheduler
 
 Open the **Search & Discovery UI** at [http://localhost:8080/](http://localhost:8080/).
 
+## Production on Render
+
+See [`DEPLOY.md`](DEPLOY.md) and [`render.yaml`](render.yaml). Render runs managed Postgres for accounts/API keys plus one all-in-one web service (API, UI, NATS, ingest workers) with a persistent `/data` disk. Programmatic clients authenticate with `X-API-Key` or Bearer JWT and receive rate-limit headers.
+
+Local accounts (optional):
+
+```bash
+docker compose up -d --build postgres nats api crawler feeds extractor indexer scheduler
+docker compose --profile migrate run --rm migrate
+```
+
 Watch ingestion:
 
 ```bash
