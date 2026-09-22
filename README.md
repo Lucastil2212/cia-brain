@@ -72,6 +72,16 @@ curl -s -X POST http://localhost:8080/v1/search \
 
 Interactive API docs are at `http://localhost:8080/docs`.
 
+## Vercel deployment
+
+The repository includes a root `app.py` entrypoint for Vercel's zero-configuration FastAPI runtime and pins Python 3.12 in `pyproject.toml`.
+
+On Vercel, `DATA_DIR` defaults to `/tmp/cia-brain`, which is writable but **ephemeral**. This lets the FastAPI application and web UI boot cleanly for a serverless deployment, including an empty search store before any index exists.
+
+The full ingestion system still requires long-running services and durable storage: NATS, crawler, feeds, extractor, indexer, scheduler, and optionally Ollama/agent. Keep Docker Compose for that backend (or move those services to a persistent container host) and treat the Vercel deployment as the public FastAPI/UI surface until the durable backend is externalized.
+
+No `vercel.json` is required for the root FastAPI entrypoint.
+
 ## Local AI agent
 
 The default AI profile uses `qwen3:8b` through Ollama. It is separate from ingestion/search so the lake remains useful on machines that cannot run a multi-GB LLM.

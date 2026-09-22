@@ -21,7 +21,7 @@ class HybridSearcher:
         self.db_path = settings.state_dir / "search.sqlite"
         self.vector_path = settings.state_dir / "vectors.usearch"
         self.meta_path = settings.state_dir / "vector-meta.json"
-        self.embedder = Embedder(settings)
+        self._embedder: Embedder | None = None
         self.db = sqlite3.connect(self.db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
@@ -29,6 +29,55 @@ class HybridSearcher:
         self._index: Index | None = None
         self._mtime = -1.0
         self._lock = threading.RLock()
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        """Initialize an empty read-compatible store when no indexer has run yet."""
+        self.db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS documents (
+              id INTEGER PRIMARY KEY,
+              source_sha256 TEXT UNIQUE NOT NULL,
+              source_url TEXT NOT NULL,
+              source_urls_json TEXT NOT NULL DEFAULT '[]',
+              requested_url TEXT,
+              title TEXT,
+              mime TEXT,
+              size INTEGER,
+              fetched_at TEXT,
+              extracted_at TEXT,
+              text_chars INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS chunks (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              document_id INTEGER NOT NULL,
+              chunk_no INTEGER NOT NULL,
+              text TEXT NOT NULL,
+              FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE,
+              UNIQUE(document_id, chunk_no)
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+              text, content='chunks', content_rowid='id', tokenize='porter unicode61'
+            );
+            CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+              INSERT INTO chunks_fts(rowid,text) VALUES(new.id,new.text);
+            END;
+            CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+              INSERT INTO chunks_fts(chunks_fts,rowid,text) VALUES('delete',old.id,old.text);
+            END;
+            CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+              INSERT INTO chunks_fts(chunks_fts,rowid,text) VALUES('delete',old.id,old.text);
+              INSERT INTO chunks_fts(rowid,text) VALUES(new.id,new.text);
+            END;
+            CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            """
+        )
+        self.db.commit()
+
+    def _get_embedder(self) -> Embedder:
+        if self._embedder is None:
+            self._embedder = Embedder(self.s)
+        return self._embedder
 
     def _load_index(self) -> Index | None:
         if not self.vector_path.exists() or not self.meta_path.exists():
@@ -41,10 +90,11 @@ class HybridSearcher:
             if self._index is not None and mtime == self._mtime:
                 return self._index
             meta = json.loads(self.meta_path.read_text())
-            if meta.get("model") != self.embedder.model_name:
+            embedder = self._get_embedder()
+            if meta.get("model") != embedder.model_name:
                 raise RuntimeError(
                     f"vector model mismatch: index={meta.get('model')} "
-                    f"runtime={self.embedder.model_name}; rebuild index"
+                    f"runtime={embedder.model_name}; rebuild index"
                 )
             idx = Index(ndim=int(meta["dim"]), metric="cos", dtype="f32")
             idx.load(str(self.vector_path))
@@ -68,7 +118,7 @@ class HybridSearcher:
         idx = self._load_index()
         if idx is None or len(idx) == 0:
             return []
-        vec = self.embedder.embed(["query: " + query])[0]
+        vec = self._get_embedder().embed(["query: " + query])[0]
         matches = idx.search(vec, min(limit, len(idx)))
         return [int(k) for k in matches.keys]
 
@@ -225,6 +275,10 @@ class HybridSearcher:
             "chunks": chunks,
             "text_chars": chars,
             "embedding_backend": self.s.embedding_backend,
-            "embedding_model": self.embedder.model_name,
+            "embedding_model": (
+                self.s.embedding_model
+                if self.s.embedding_backend.lower() == "fastembed"
+                else self.s.ollama_embed_model
+            ),
             "frontier": crawl,
         }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -9,7 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    data_dir: Path = Path("/data")
+    # Vercel Functions have writable ephemeral storage under /tmp. DATA_DIR still overrides this.
+    data_dir: Path = Path("/tmp/cia-brain") if os.getenv("VERCEL") else Path("/data")
     nats_url: str = "nats://nats:4222"
     log_level: str = "INFO"
 
