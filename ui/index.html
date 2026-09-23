@@ -37,27 +37,29 @@
 <body>
   <div class="shelf" aria-hidden="true"></div>
   <header class="topbar">
-    <a class="brand" href="#catalog" data-view-link="search">
-      <img src="/assets/logo.svg" width="40" height="40" alt="" class="brand-mark-img" />
-      <span class="brand-text">
-        <span class="brand-name">CIA Brain</span>
-        <span class="brand-sub">Research Catalog</span>
-      </span>
-    </a>
-    <nav class="nav" aria-label="Primary">
-      <button type="button" data-view="search" class="nav-btn is-active">Catalog</button>
-      <button type="button" data-view="graph" class="nav-btn">Knowledge graph</button>
-      <button type="button" data-view="gallery" class="nav-btn">Multimodal</button>
-      <button type="button" data-view="sources" class="nav-btn">Collections</button>
-      <button type="button" data-view="browse" class="nav-btn">Holdings</button>
-      <button type="button" data-view="reason" class="nav-btn">Reading room</button>
-      <button type="button" data-view="account" class="nav-btn">Account</button>
-      <button type="button" data-view="pipeline" class="nav-btn">Stacks</button>
-    </nav>
-    <div class="top-meta" id="top-meta">opening the stacks…</div>
+    <div class="frame topbar-frame">
+      <a class="brand" href="#catalog" data-view-link="search">
+        <img src="/assets/logo.svg" width="40" height="40" alt="" class="brand-mark-img" />
+        <span class="brand-text">
+          <span class="brand-name">CIA Brain</span>
+          <span class="brand-sub">Research Catalog</span>
+        </span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <button type="button" data-view="search" class="nav-btn is-active">Catalog</button>
+        <button type="button" data-view="graph" class="nav-btn">Knowledge graph</button>
+        <button type="button" data-view="gallery" class="nav-btn">Multimodal</button>
+        <button type="button" data-view="sources" class="nav-btn">Collections</button>
+        <button type="button" data-view="browse" class="nav-btn">Holdings</button>
+        <button type="button" data-view="reason" class="nav-btn">Reading room</button>
+        <button type="button" data-view="account" class="nav-btn">Account</button>
+        <button type="button" data-view="pipeline" class="nav-btn">Stacks</button>
+      </nav>
+      <div class="top-meta" id="top-meta">opening the stacks…</div>
+    </div>
   </header>
 
-  <main>
+  <main class="frame">
     <section id="view-search" class="view is-active">
       <div class="hero">
         <p class="eyebrow">Special collections · local open data lake</p>
@@ -90,25 +92,64 @@
     <section id="view-graph" class="view">
       <div class="panel-head">
         <h2>Knowledge graph</h2>
-        <p>Interactive entity neighborhoods. Edges are inferred from source passages — candidates for research, not established facts.</p>
+        <p>Interactive analytics over inferred entity links. Edges are evidence-backed candidates — not established facts.</p>
       </div>
-      <form id="graph-form" class="search-form">
-        <label class="sr-only" for="graph-q">Entity</label>
-        <input id="graph-q" placeholder="Find an entity, e.g. NASA or Dulles" />
-        <button type="submit">Look up</button>
-      </form>
       <div id="graph-stats" class="status"></div>
+      <div class="viz-row" id="graph-analytics-row">
+        <figure class="viz-panel">
+          <figcaption>Relation mix</figcaption>
+          <div id="graph-relation-chart" class="chart"></div>
+        </figure>
+        <figure class="viz-panel">
+          <figcaption>Entity kinds</figcaption>
+          <div id="graph-kind-chart" class="chart"></div>
+        </figure>
+        <figure class="viz-panel">
+          <figcaption>Highest-degree hubs</figcaption>
+          <div id="graph-hub-chart" class="chart"></div>
+        </figure>
+      </div>
+      <div class="graph-toolbar filters">
+        <form id="graph-form" class="search-form" style="flex:1;margin:0">
+          <label class="sr-only" for="graph-q">Entity</label>
+          <input id="graph-q" placeholder="Find an entity, e.g. NASA or Dulles" />
+          <button type="submit">Look up</button>
+        </form>
+        <label>Relation
+          <select id="graph-relation">
+            <option value="">All relations</option>
+          </select>
+        </label>
+        <label>View
+          <select id="graph-mode">
+            <option value="overview">Overview hubs</option>
+            <option value="neighborhood">Entity neighborhood</option>
+            <option value="path">Shortest path</option>
+          </select>
+        </label>
+        <button type="button" id="graph-refresh" class="pager">Refresh analytics</button>
+      </div>
+      <div id="graph-path-tools" class="filters" hidden>
+        <label>From
+          <select id="graph-path-from"></select>
+        </label>
+        <label>To
+          <select id="graph-path-to"></select>
+        </label>
+        <button type="button" id="graph-path-run">Find path</button>
+      </div>
       <div class="graph-layout">
         <div class="graph-stage">
           <canvas id="graph-canvas" width="900" height="520" aria-label="Interactive knowledge graph"></canvas>
-          <p class="graph-hint">Drag nodes · scroll to zoom · click a node for evidence</p>
+          <p class="graph-hint">Drag nodes · scroll to zoom · click a node for profile &amp; evidence · overview shows top hubs</p>
+          <div id="graph-legend" class="graph-legend"></div>
         </div>
         <aside class="graph-side">
           <div id="graph-entities" class="entity-list"></div>
+          <div id="graph-profile" class="evidence-panel"></div>
           <div id="graph-detail" class="evidence-panel"></div>
         </aside>
       </div>
-      <div id="graph-kind-chart" class="chart chart-wide" role="img" aria-label="Entity kinds chart"></div>
     </section>
 
     <section id="view-gallery" class="view">
@@ -239,7 +280,7 @@
     </section>
   </main>
 
-  <footer class="site-footer">
+  <footer class="site-footer frame">
     <div class="footer-brand">
       <img src="/assets/logo.svg" width="28" height="28" alt="" />
       <div>

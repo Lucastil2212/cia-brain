@@ -289,6 +289,33 @@ def infer_relation(sentence: str, subject_label: str, object_label: str) -> str:
     return "co_mentioned"
 
 
+STOPWORD_LABELS = {
+    "the", "of", "and", "a", "an", "to", "in", "for", "on", "by", "with", "as",
+    "at", "from", "or", "is", "was", "were", "be", "been", "are", "do", "did",
+    "has", "had", "have", "this", "that", "it", "its", "their", "his", "her",
+    "not", "no", "yes", "page", "file", "doc", "today", "daily", "year", "years",
+    "agency", "american", "americans", "america", "soviet", "us", "war", "new",
+    "old", "general", "secret", "led", "warning", "intelligence",
+}
+
+
+def _usable_entity_sql(alias: str = "e"):
+    """SQL fragment: prefer real entities over OCR/title-case noise."""
+    return """
+      length(trim({a}.label)) >= 3
+      AND lower(trim({a}.label)) NOT IN ({stops})
+      AND {a}.kind <> 'date'
+      AND NOT (
+        {a}.kind = 'named_entity'
+        AND {a}.label = upper({a}.label)
+        AND instr(trim({a}.label), ' ') = 0
+      )
+    """.format(
+        a=alias,
+        stops=",".join(f"'{w}'" for w in sorted(STOPWORD_LABELS)),
+    )
+
+
 def haversine_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
@@ -452,16 +479,23 @@ class KnowledgeGraph:
 
     def entities(self, query="", limit=50):
         with self.connect() as db:
+            q = (query or "").strip()
+            clause = f"d.active=1 AND {_usable_entity_sql()}"
+            params: list = []
+            if q:
+                clause += " AND instr(lower(e.label),lower(?))>0"
+                params.append(q)
+            params.append(limit)
             return [
                 dict(r)
                 for r in db.execute(
-                    """
+                    f"""
                 SELECT e.*, count(DISTINCT m.sha) AS documents FROM entities e
                 JOIN mentions m ON m.entity=e.id JOIN documents d ON d.sha=m.sha
-                WHERE d.active=1 AND instr(lower(e.label),lower(?))>0
+                WHERE {clause}
                 GROUP BY e.id ORDER BY documents DESC,e.label LIMIT ?
             """,
-                    (query, limit),
+                    params,
                 )
             ]
 
@@ -470,11 +504,13 @@ class KnowledgeGraph:
             edges = [
                 dict(r) | {"inferred": True}
                 for r in db.execute(
-                    """
+                    f"""
                 SELECT x.*, a.label AS subject_label,b.label AS object_label,d.url,d.title
                 FROM edges x JOIN entities a ON a.id=x.subject JOIN entities b ON b.id=x.object
                 JOIN documents d ON d.sha=x.sha
                 WHERE d.active=1 AND (x.subject=? OR x.object=?)
+                  AND {_usable_entity_sql('a')}
+                  AND {_usable_entity_sql('b')}
                 ORDER BY d.fetched_at DESC LIMIT ?
             """,
                     (entity, entity, limit),
@@ -593,3 +629,266 @@ class KnowledgeGraph:
             base["typed_edges"] = typed
             base["ner_backend"] = resolve_ner_method(self.ner_method)
             return base
+
+    def analytics(self, hub_limit: int = 15):
+        """Aggregate graph analytics for the research UI."""
+        with self.connect() as db:
+            relations = [
+                {"relation": r[0], "count": r[1]}
+                for r in db.execute(
+                    """
+                    SELECT relation, count(*) FROM edges x
+                    JOIN documents d ON d.sha=x.sha WHERE d.active=1
+                    GROUP BY relation ORDER BY count(*) DESC
+                    """
+                )
+            ]
+            kinds = [
+                {"kind": r[0], "count": r[1]}
+                for r in db.execute(
+                    """
+                    SELECT e.kind, count(DISTINCT e.id) FROM entities e
+                    JOIN mentions m ON m.entity=e.id
+                    JOIN documents d ON d.sha=m.sha WHERE d.active=1
+                    GROUP BY e.kind ORDER BY count(DISTINCT e.id) DESC
+                    """
+                )
+            ]
+            hubs = [
+                {
+                    "id": r[0],
+                    "label": r[1],
+                    "kind": r[2],
+                    "degree": r[3],
+                    "documents": r[4],
+                }
+                for r in db.execute(
+                    f"""
+                    WITH deg AS (
+                      SELECT entity, count(*) AS degree FROM (
+                        SELECT subject AS entity FROM edges
+                        UNION ALL
+                        SELECT object AS entity FROM edges
+                      ) GROUP BY entity
+                    )
+                    SELECT e.id, e.label, e.kind, deg.degree,
+                           count(DISTINCT m.sha) AS documents
+                    FROM deg
+                    JOIN entities e ON e.id=deg.entity
+                    JOIN mentions m ON m.entity=e.id
+                    JOIN documents d ON d.sha=m.sha AND d.active=1
+                    WHERE {_usable_entity_sql()}
+                    GROUP BY e.id
+                    ORDER BY deg.degree DESC, documents DESC
+                    LIMIT ?
+                    """,
+                    (hub_limit,),
+                )
+            ]
+            return {
+                **self.stats(),
+                "relations": relations,
+                "kinds": kinds,
+                "hubs": hubs,
+            }
+
+    def overview(self, limit: int = 40, relation: str = ""):
+        """Connected subgraph among highest-degree entities for the canvas overview."""
+        with self.connect() as db:
+            hubs = [
+                {"id": r[0], "label": r[1], "kind": r[2], "degree": r[3]}
+                for r in db.execute(
+                    f"""
+                    WITH deg AS (
+                      SELECT entity, count(*) AS degree FROM (
+                        SELECT subject AS entity FROM edges
+                        UNION ALL
+                        SELECT object AS entity FROM edges
+                      ) GROUP BY entity
+                    )
+                    SELECT e.id, e.label, e.kind, deg.degree
+                    FROM deg JOIN entities e ON e.id=deg.entity
+                    WHERE {_usable_entity_sql()}
+                    ORDER BY deg.degree DESC LIMIT ?
+                    """,
+                    (limit,),
+                )
+            ]
+            ids = [h["id"] for h in hubs]
+            if not ids:
+                return {"nodes": [], "links": [], "method": "top-degree overview"}
+            placeholders = ",".join("?" * len(ids))
+            params: list = list(ids) + list(ids)
+            rel_clause = ""
+            if relation:
+                rel_clause = " AND x.relation=?"
+                params.append(relation)
+            link_rows = db.execute(
+                f"""
+                SELECT x.subject, x.object, x.relation, count(*) AS weight,
+                       min(a.label) AS subject_label, min(b.label) AS object_label
+                FROM edges x
+                JOIN entities a ON a.id=x.subject
+                JOIN entities b ON b.id=x.object
+                JOIN documents d ON d.sha=x.sha
+                WHERE d.active=1 AND x.subject IN ({placeholders})
+                  AND x.object IN ({placeholders}){rel_clause}
+                GROUP BY x.subject, x.object, x.relation
+                ORDER BY weight DESC
+                LIMIT 400
+                """,
+                params,
+            ).fetchall()
+            links = [
+                {
+                    "source": r[0],
+                    "target": r[1],
+                    "relation": r[2],
+                    "weight": r[3],
+                    "subject_label": r[4],
+                    "object_label": r[5],
+                }
+                for r in link_rows
+            ]
+            return {
+                "nodes": hubs,
+                "links": links,
+                "method": "top-degree overview; edge weight = co-evidence count",
+            }
+
+    def shortest_path(self, source: str, target: str, max_depth: int = 6):
+        """BFS over undirected co-mention edges; returns node ids and hop evidence."""
+        if source == target:
+            return {"path": [source], "edges": [], "hops": 0}
+        with self.connect() as db:
+            labels = {
+                r[0]: {"id": r[0], "label": r[1], "kind": r[2]}
+                for r in db.execute("SELECT id,label,kind FROM entities WHERE id IN (?,?)", (source, target))
+            }
+            if source not in labels or target not in labels:
+                return {"path": [], "edges": [], "hops": None, "note": "unknown entity id"}
+            frontier = [source]
+            prev: dict[str, tuple[str, dict] | None] = {source: None}
+            depth = {source: 0}
+            while frontier:
+                current = frontier.pop(0)
+                if depth[current] >= max_depth:
+                    continue
+                rows = db.execute(
+                    """
+                    SELECT x.subject, x.object, x.relation, x.evidence, x.sha, d.url, d.title,
+                           a.label, b.label
+                    FROM edges x
+                    JOIN entities a ON a.id=x.subject
+                    JOIN entities b ON b.id=x.object
+                    JOIN documents d ON d.sha=x.sha
+                    WHERE d.active=1 AND (x.subject=? OR x.object=?)
+                    LIMIT 200
+                    """,
+                    (current, current),
+                ).fetchall()
+                for row in rows:
+                    subj, obj, relation, evidence, sha, url, title, subj_l, obj_l = row
+                    nxt = obj if subj == current else subj
+                    if nxt in prev:
+                        continue
+                    edge = {
+                        "subject": subj,
+                        "object": obj,
+                        "subject_label": subj_l,
+                        "object_label": obj_l,
+                        "relation": relation,
+                        "evidence": evidence,
+                        "sha": sha,
+                        "url": url,
+                        "title": title,
+                        "inferred": True,
+                    }
+                    prev[nxt] = (current, edge)
+                    depth[nxt] = depth[current] + 1
+                    if nxt == target:
+                        frontier = []
+                        break
+                    frontier.append(nxt)
+            if target not in prev:
+                return {
+                    "path": [],
+                    "edges": [],
+                    "hops": None,
+                    "note": f"no path within {max_depth} hops",
+                }
+            path_ids = [target]
+            edge_chain = []
+            cursor = target
+            while prev[cursor] is not None:
+                parent, edge = prev[cursor]
+                edge_chain.append(edge)
+                path_ids.append(parent)
+                cursor = parent
+            path_ids.reverse()
+            edge_chain.reverse()
+            nodes = []
+            for eid in path_ids:
+                row = db.execute(
+                    "SELECT id,label,kind FROM entities WHERE id=?", (eid,)
+                ).fetchone()
+                if row:
+                    nodes.append({"id": row[0], "label": row[1], "kind": row[2]})
+            return {"path": path_ids, "nodes": nodes, "edges": edge_chain, "hops": len(edge_chain)}
+
+    def entity_profile(self, entity: str):
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT id,label,kind FROM entities WHERE id=?", (entity,)
+            ).fetchone()
+            if row is None:
+                return None
+            degree = db.execute(
+                """
+                SELECT count(*) FROM edges x JOIN documents d ON d.sha=x.sha
+                WHERE d.active=1 AND (x.subject=? OR x.object=?)
+                """,
+                (entity, entity),
+            ).fetchone()[0]
+            relations = [
+                {"relation": r[0], "count": r[1]}
+                for r in db.execute(
+                    """
+                    SELECT relation, count(*) FROM edges x
+                    JOIN documents d ON d.sha=x.sha
+                    WHERE d.active=1 AND (x.subject=? OR x.object=?)
+                    GROUP BY relation ORDER BY count(*) DESC
+                    """,
+                    (entity, entity),
+                )
+            ]
+            neighbors = [
+                {
+                    "id": r[0],
+                    "label": r[1],
+                    "kind": r[2],
+                    "weight": r[3],
+                    "relation": r[4],
+                }
+                for r in db.execute(
+                    f"""
+                    SELECT e.id, e.label, e.kind, count(*) AS weight,
+                           min(x.relation) AS relation
+                    FROM edges x
+                    JOIN documents d ON d.sha=x.sha
+                    JOIN entities e ON e.id = CASE WHEN x.subject=? THEN x.object ELSE x.subject END
+                    WHERE d.active=1 AND (x.subject=? OR x.object=?)
+                      AND {_usable_entity_sql()}
+                    GROUP BY e.id ORDER BY weight DESC LIMIT 25
+                    """,
+                    (entity, entity, entity),
+                )
+            ]
+            return {
+                "id": row[0],
+                "label": row[1],
+                "kind": row[2],
+                "degree": degree,
+                "relations": relations,
+                "neighbors": neighbors,
+            }

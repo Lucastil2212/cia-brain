@@ -272,6 +272,16 @@ async function openDocument(sha) {
 }
 
 /* —— Force-directed knowledge graph —— */
+const KIND_COLORS = {
+  organization: "#0d5c4d",
+  person: "#8b6914",
+  location: "#2f5d8c",
+  date: "#5c6b63",
+  event: "#6b3a5c",
+  group: "#3d6b4f",
+  named_entity: "#4a5c56",
+};
+
 function createForceGraph(canvas) {
   const ctx = canvas.getContext("2d");
   let nodes = [];
@@ -283,29 +293,40 @@ function createForceGraph(canvas) {
   let panY = 0;
   let drag = null;
   let hover = null;
+  let panning = false;
+  let panLast = null;
   let onSelect = null;
+  const positions = new Map();
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(320, Math.floor(rect.width * dpr));
-    canvas.height = Math.max(240, Math.floor((rect.width * 0.58) * dpr));
-    canvas.style.height = `${canvas.height / dpr}px`;
+    const cssW = Math.max(320, rect.width || 640);
+    const cssH = Math.max(280, cssW * 0.55);
+    canvas.width = Math.floor(cssW * dpr);
+    canvas.height = Math.floor(cssH * dpr);
+    canvas.style.width = `${cssW}px`;
+    canvas.style.height = `${cssH}px`;
+    return { w: canvas.width, h: canvas.height };
   }
 
-  function setData(payload, selectCb) {
+  function setData(payload, selectCb, { preserve = true } = {}) {
     onSelect = selectCb;
+    const { w, h } = resize();
     const map = new Map();
     for (const n of payload.nodes || []) {
-      map.set(n.id, {
+      const prior = preserve ? positions.get(n.id) : null;
+      const node = {
         id: n.id,
-        label: n.label,
+        label: n.label || String(n.id).slice(0, 8),
         kind: n.kind || "named_entity",
-        x: canvas.width * (0.25 + Math.random() * 0.5),
-        y: canvas.height * (0.25 + Math.random() * 0.5),
+        degree: n.degree || n.weight || 1,
+        x: prior?.x ?? w * (0.2 + Math.random() * 0.6),
+        y: prior?.y ?? h * (0.2 + Math.random() * 0.6),
         vx: 0,
         vy: 0,
-      });
+      };
+      map.set(n.id, node);
     }
     links = (payload.links || [])
       .filter((e) => map.has(e.source) && map.has(e.target))
@@ -313,18 +334,22 @@ function createForceGraph(canvas) {
         source: map.get(e.source),
         target: map.get(e.target),
         relation: e.relation || "co_mentioned",
+        weight: e.weight || 1,
       }));
     nodes = [...map.values()];
-    resize();
+    for (const n of nodes) positions.set(n.id, { x: n.x, y: n.y });
     if (!running) {
       running = true;
       loop();
     }
+    renderLegend(nodes);
   }
 
   function step() {
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
+    const nCount = Math.max(nodes.length, 1);
+    const repulse = Math.min(2800, 400 + nCount * 40);
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
         const a = nodes[i];
@@ -332,7 +357,7 @@ function createForceGraph(canvas) {
         let dx = a.x - b.x;
         let dy = a.y - b.y;
         let dist = Math.hypot(dx, dy) || 0.01;
-        const force = 1200 / (dist * dist);
+        const force = repulse / (dist * dist);
         dx = (dx / dist) * force;
         dy = (dy / dist) * force;
         a.vx += dx;
@@ -347,7 +372,8 @@ function createForceGraph(canvas) {
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const dist = Math.hypot(dx, dy) || 0.01;
-      const force = (dist - 110) * 0.02;
+      const ideal = 90 + Math.min(80, (link.weight || 1) * 4);
+      const force = (dist - ideal) * 0.025;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
       a.vx += fx;
@@ -356,53 +382,50 @@ function createForceGraph(canvas) {
       b.vy -= fy;
     }
     for (const n of nodes) {
-      n.vx += (cx - n.x) * 0.003;
-      n.vy += (cy - n.y) * 0.003;
-      n.vx *= 0.85;
-      n.vy *= 0.85;
+      n.vx += (cx - n.x) * 0.004;
+      n.vy += (cy - n.y) * 0.004;
+      n.vx *= 0.82;
+      n.vy *= 0.82;
       if (drag !== n) {
         n.x += n.vx;
         n.y += n.vy;
       }
+      positions.set(n.id, { x: n.x, y: n.y });
     }
-  }
-
-  function kindColor(kind) {
-    const map = {
-      organization: "#0d5c4d",
-      person: "#8b6914",
-      location: "#2f5d8c",
-      date: "#5c6b63",
-      event: "#6b3a5c",
-      group: "#3d6b4f",
-    };
-    return map[kind] || "#4a5c56";
   }
 
   function draw() {
     const w = canvas.width;
     const h = canvas.height;
+    const dpr = window.devicePixelRatio || 1;
     ctx.clearRect(0, 0, w, h);
     ctx.save();
     ctx.translate(panX, panY);
     ctx.scale(scale, scale);
-    ctx.strokeStyle = "rgba(26,46,40,0.28)";
-    ctx.lineWidth = 1.2;
     for (const link of links) {
+      const typed = link.relation && link.relation !== "co_mentioned";
       ctx.beginPath();
+      ctx.strokeStyle = typed ? "rgba(13,92,77,0.55)" : "rgba(26,46,40,0.22)";
+      ctx.lineWidth = Math.min(4, 1 + Math.log2(1 + (link.weight || 1)));
       ctx.moveTo(link.source.x, link.source.y);
       ctx.lineTo(link.target.x, link.target.y);
       ctx.stroke();
     }
     for (const n of nodes) {
-      const r = n === hover || n.id === state.selectedEntity ? 9 : 6;
+      const selected = n.id === state.selectedEntity;
+      const r = (selected || n === hover ? 10 : 6) + Math.min(6, Math.log2(1 + (n.degree || 1)));
       ctx.beginPath();
-      ctx.fillStyle = kindColor(n.kind);
+      ctx.fillStyle = KIND_COLORS[n.kind] || KIND_COLORS.named_entity;
       ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
       ctx.fill();
+      if (selected) {
+        ctx.strokeStyle = "#c5a35a";
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+      }
       ctx.fillStyle = "#1a2e28";
-      ctx.font = `${11 * (window.devicePixelRatio || 1)}px "IBM Plex Mono", monospace`;
-      ctx.fillText(n.label.slice(0, 28), n.x + 10, n.y + 4);
+      ctx.font = `${Math.round(11 * dpr)}px "IBM Plex Mono", monospace`;
+      ctx.fillText((n.label || "").slice(0, 28), n.x + r + 4, n.y + 4);
     }
     ctx.restore();
   }
@@ -424,7 +447,7 @@ function createForceGraph(canvas) {
   function hit(ev) {
     const p = toWorld(ev);
     let best = null;
-    let bestDist = 14;
+    let bestDist = 18;
     for (const n of nodes) {
       const d = Math.hypot(n.x - p.x, n.y - p.y);
       if (d < bestDist) {
@@ -441,7 +464,11 @@ function createForceGraph(canvas) {
       drag = n;
       canvas.setPointerCapture(ev.pointerId);
       state.selectedEntity = n.id;
-      if (onSelect) onSelect(n.id);
+      if (onSelect) onSelect(n.id, { fromCanvas: true });
+    } else {
+      panning = true;
+      panLast = { x: ev.clientX, y: ev.clientY };
+      canvas.setPointerCapture(ev.pointerId);
     }
   });
   canvas.addEventListener("pointermove", (ev) => {
@@ -451,19 +478,27 @@ function createForceGraph(canvas) {
       drag.y = p.y;
       drag.vx = 0;
       drag.vy = 0;
+    } else if (panning && panLast) {
+      const dpr = window.devicePixelRatio || 1;
+      panX += (ev.clientX - panLast.x) * dpr;
+      panY += (ev.clientY - panLast.y) * dpr;
+      panLast = { x: ev.clientX, y: ev.clientY };
     } else {
       hover = hit(ev);
+      canvas.style.cursor = hover ? "pointer" : "grab";
     }
   });
   canvas.addEventListener("pointerup", () => {
     drag = null;
+    panning = false;
+    panLast = null;
   });
   canvas.addEventListener(
     "wheel",
     (ev) => {
       ev.preventDefault();
       const factor = ev.deltaY < 0 ? 1.08 : 0.92;
-      scale = Math.min(3, Math.max(0.4, scale * factor));
+      scale = Math.min(3.5, Math.max(0.35, scale * factor));
     },
     { passive: false },
   );
@@ -473,6 +508,9 @@ function createForceGraph(canvas) {
 
   return {
     setData,
+    highlight(id) {
+      state.selectedEntity = id;
+    },
     destroy() {
       cancelAnimationFrame(raf);
       running = false;
@@ -480,42 +518,166 @@ function createForceGraph(canvas) {
   };
 }
 
-async function selectEntity(entityId) {
+function renderLegend(nodes) {
+  const el = $("#graph-legend");
+  if (!el) return;
+  const kinds = [...new Set(nodes.map((n) => n.kind))];
+  el.innerHTML = kinds
+    .map(
+      (k) =>
+        `<span><i style="background:${KIND_COLORS[k] || KIND_COLORS.named_entity}"></i>${escapeHtml(String(k).replaceAll("_", " "))}</span>`,
+    )
+    .join("");
+}
+
+function fillEntitySelect(sel, entities, selected) {
+  if (!sel) return;
+  sel.innerHTML = entities
+    .map(
+      (e) =>
+        `<option value="${escapeHtml(e.id)}"${e.id === selected ? " selected" : ""}>${escapeHtml(e.label)} (${escapeHtml(e.kind)})</option>`,
+    )
+    .join("");
+}
+
+function renderProfile(profile) {
+  const box = $("#graph-profile");
+  if (!box) return;
+  if (!profile) {
+    box.innerHTML = "";
+    return;
+  }
+  const relMax = Math.max(...(profile.relations || []).map((x) => x.count), 1);
+  box.innerHTML = `
+    <h3 style="margin:0;font-family:var(--font-display)">${escapeHtml(profile.label)}</h3>
+    <p class="meta">${escapeHtml(profile.kind)} · degree ${fmtNum(profile.degree)}</p>
+    <div class="profile-grid">
+      <div class="profile-stat"><div class="label">Degree</div><div class="value">${fmtNum(profile.degree)}</div></div>
+      <div class="profile-stat"><div class="label">Neighbors</div><div class="value">${fmtNum((profile.neighbors || []).length)}</div></div>
+    </div>
+    <div class="chart">${(profile.relations || [])
+      .slice(0, 6)
+      .map((r) => {
+        const pct = Math.max(4, Math.round((r.count / relMax) * 100));
+        return `<div class="chart-bar-row"><span class="chart-bar-label">${escapeHtml(r.relation)}</span><div class="chart-bar-track"><div class="chart-bar-fill" style="width:${pct}%"></div></div><span class="chart-bar-value">${fmtNum(r.count)}</span></div>`;
+      })
+      .join("")}</div>
+    <p class="meta" style="margin-top:0.75rem">Top neighbors</p>
+    ${(profile.neighbors || [])
+      .slice(0, 8)
+      .map(
+        (n) =>
+          `<button type="button" class="entity-chip" data-entity="${escapeHtml(n.id)}" data-kind="${escapeHtml(n.kind)}"><span>${escapeHtml(n.label)}</span><small>${escapeHtml(n.relation)} · w${n.weight}</small></button>`,
+      )
+      .join("")}
+  `;
+}
+
+async function showOverview() {
+  const relation = $("#graph-relation")?.value || "";
+  const data = await api(
+    `/v1/graph/overview?limit=40${relation ? `&relation=${encodeURIComponent(relation)}` : ""}`,
+  );
+  if (!state.graphSim) state.graphSim = createForceGraph($("#graph-canvas"));
+  state.graphSim.setData(
+    {
+      nodes: data.nodes || [],
+      links: (data.links || []).map((l) => ({
+        source: l.source,
+        target: l.target,
+        relation: l.relation,
+        weight: l.weight,
+      })),
+    },
+    (id) => selectEntity(id, { mode: "neighborhood" }),
+    { preserve: false },
+  );
+  $("#graph-detail").innerHTML = `<p class="status">${fmtNum((data.nodes || []).length)} hubs · ${fmtNum((data.links || []).length)} weighted links · ${escapeHtml(data.method || "")}</p>`;
+  if ((data.nodes || []).length && !state.selectedEntity) {
+    state.selectedEntity = data.nodes[0].id;
+  }
+  if (state.selectedEntity) {
+    try {
+      const nb = await api(`/v1/graph/entities/${state.selectedEntity}`);
+      renderProfile(nb.profile);
+    } catch {
+      /* overview without profile is fine */
+    }
+  }
+}
+
+async function selectEntity(entityId, opts = {}) {
   state.selectedEntity = entityId;
+  if (opts.mode && $("#graph-mode")) $("#graph-mode").value = opts.mode;
   $$(".entity-chip").forEach((el) => el.classList.toggle("is-active", el.dataset.entity === entityId));
+  if (state.graphSim) state.graphSim.highlight(entityId);
   const detail = $("#graph-detail");
   detail.innerHTML = `<p class="status">Loading neighborhood…</p>`;
   try {
     const data = await api(`/v1/graph/entities/${entityId}`);
+    renderProfile(data.profile);
     const nodes = new Map();
     const links = [];
+    if (data.profile) {
+      nodes.set(entityId, {
+        id: entityId,
+        label: data.profile.label,
+        kind: data.profile.kind,
+        degree: data.profile.degree,
+      });
+    }
     for (const edge of data.edges || []) {
-      nodes.set(edge.subject, { id: edge.subject, label: edge.subject_label, kind: "named_entity" });
-      nodes.set(edge.object, { id: edge.object, label: edge.object_label, kind: "named_entity" });
-      links.push({ source: edge.subject, target: edge.object, relation: edge.relation });
+      nodes.set(edge.subject, {
+        id: edge.subject,
+        label: edge.subject_label,
+        kind: nodes.get(edge.subject)?.kind || "named_entity",
+      });
+      nodes.set(edge.object, {
+        id: edge.object,
+        label: edge.object_label,
+        kind: nodes.get(edge.object)?.kind || "named_entity",
+      });
+      links.push({
+        source: edge.subject,
+        target: edge.object,
+        relation: edge.relation,
+        weight: 1,
+      });
     }
-    if (!nodes.size && data.mentions?.length) {
-      nodes.set(entityId, { id: entityId, label: entityId.slice(0, 8), kind: "named_entity" });
+    for (const n of data.profile?.neighbors || []) {
+      if (nodes.has(n.id)) nodes.get(n.id).kind = n.kind;
+      else nodes.set(n.id, { id: n.id, label: n.label, kind: n.kind, degree: n.weight });
     }
-    // Enrich kinds from entity list if present
-    for (const chip of $$(".entity-chip")) {
+    for (const chip of $$("#graph-entities .entity-chip, #graph-profile .entity-chip")) {
       const id = chip.dataset.entity;
       if (nodes.has(id)) {
-        const label = chip.querySelector("span")?.textContent || nodes.get(id).label;
-        const kind = chip.dataset.kind || "named_entity";
-        nodes.set(id, { id, label, kind });
+        nodes.set(id, {
+          ...nodes.get(id),
+          label: chip.querySelector("span")?.textContent || nodes.get(id).label,
+          kind: chip.dataset.kind || nodes.get(id).kind,
+        });
       }
     }
+    if (!nodes.size) {
+      nodes.set(entityId, {
+        id: entityId,
+        label: data.profile?.label || entityId.slice(0, 8),
+        kind: data.profile?.kind || "named_entity",
+      });
+    }
     if (!state.graphSim) state.graphSim = createForceGraph($("#graph-canvas"));
-    state.graphSim.setData({ nodes: [...nodes.values()], links }, selectEntity);
+    state.graphSim.setData({ nodes: [...nodes.values()], links }, (id) => selectEntity(id), {
+      preserve: Boolean(opts.fromCanvas),
+    });
 
     detail.innerHTML =
       (data.edges || [])
+        .slice(0, 40)
         .map(
           (x) => `<article class="result">
           <h3>${escapeHtml(x.subject_label)} · ${escapeHtml(x.relation || "co_mentioned")} · ${escapeHtml(x.object_label)}</h3>
           <blockquote>${escapeHtml(x.evidence)}</blockquote>
-          <p class="meta">${escapeHtml(x.url || "")}</p>
+          <p class="meta">${escapeHtml(x.title || "")} · ${escapeHtml(x.url || "")}</p>
           <p>
             <a href="/v1/raw/${escapeHtml(x.sha)}" target="_blank" rel="noopener">Archived source</a>
             <button type="button" class="linkish" data-correlate="${escapeHtml(x.sha)}">Related</button>
@@ -532,42 +694,148 @@ async function selectEntity(entityId) {
   }
 }
 
+async function runPathFind() {
+  const source = $("#graph-path-from").value;
+  const target = $("#graph-path-to").value;
+  if (!source || !target) return;
+  const detail = $("#graph-detail");
+  detail.innerHTML = `<p class="status">Searching path…</p>`;
+  try {
+    const data = await api(
+      `/v1/graph/path?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}&max_depth=6`,
+    );
+    if (!data.path?.length) {
+      detail.innerHTML = `<p class="status">${escapeHtml(data.note || "No path found")}</p>`;
+      return;
+    }
+    if (!state.graphSim) state.graphSim = createForceGraph($("#graph-canvas"));
+    state.graphSim.setData(
+      {
+        nodes: data.nodes || [],
+        links: (data.edges || []).map((e) => ({
+          source: e.subject,
+          target: e.object,
+          relation: e.relation,
+          weight: 2,
+        })),
+      },
+      (id) => selectEntity(id),
+      { preserve: false },
+    );
+    state.selectedEntity = target;
+    detail.innerHTML = `<p class="status">${data.hops} hop${data.hops === 1 ? "" : "s"} · inferred path</p>${(data.edges || [])
+      .map(
+        (e, i) => `<div class="path-hop"><strong>${i + 1}.</strong> ${escapeHtml(e.subject_label)}
+        — <em>${escapeHtml(e.relation)}</em> → ${escapeHtml(e.object_label)}
+        <blockquote>${escapeHtml(e.evidence)}</blockquote>
+        <button type="button" class="linkish open-doc" data-sha="${escapeHtml(e.sha)}">Open record</button>
+      </div>`,
+      )
+      .join("")}`;
+    bindDocButtons(detail);
+    try {
+      const nb = await api(`/v1/graph/entities/${target}`);
+      renderProfile(nb.profile);
+    } catch {
+      /* ignore */
+    }
+  } catch (err) {
+    detail.textContent = err.message;
+  }
+}
+
+async function loadGraphAnalytics() {
+  const analytics = await api("/v1/graph/analytics?hub_limit=12");
+  $("#graph-stats").textContent =
+    `${fmtNum(analytics.documents)} documents · ${fmtNum(analytics.entities)} entities · ${fmtNum(analytics.edges)} links · ${fmtNum(analytics.typed_edges || 0)} typed · NER ${analytics.ner_backend || "rules"}`;
+  renderBarChart(
+    $("#graph-relation-chart"),
+    (analytics.relations || []).map((r) => ({ label: r.relation, value: r.count })),
+  );
+  renderBarChart(
+    $("#graph-kind-chart"),
+    (analytics.kinds || []).map((k) => ({ label: k.kind, value: k.count })),
+  );
+  renderBarChart(
+    $("#graph-hub-chart"),
+    (analytics.hubs || []).map((h) => ({ label: h.label, value: h.degree })),
+  );
+  const relSel = $("#graph-relation");
+  if (relSel) {
+    const current = relSel.value;
+    relSel.innerHTML =
+      `<option value="">All relations</option>` +
+      (analytics.relations || [])
+        .map(
+          (r) =>
+            `<option value="${escapeHtml(r.relation)}">${escapeHtml(r.relation)} (${r.count})</option>`,
+        )
+        .join("");
+    if ([...relSel.options].some((o) => o.value === current)) relSel.value = current;
+  }
+  return analytics;
+}
+
 async function loadGraph() {
   try {
-    const q = $("#graph-q").value;
-    const [stats, data] = await Promise.all([
-      api("/v1/graph/stats"),
-      api(`/v1/graph/entities?q=${encodeURIComponent(q)}&limit=40`),
-    ]);
-    $("#graph-stats").textContent =
-      `${fmtNum(stats.documents)} documents · ${fmtNum(stats.entities)} entities · ${fmtNum(stats.edges)} links · NER ${stats.ner_backend || "rules"}`;
-    const entities = data.entities || [];
+    const q = $("#graph-q").value.trim();
+    const mode = $("#graph-mode")?.value || "overview";
+    if ($("#graph-path-tools")) $("#graph-path-tools").hidden = mode !== "path";
+
+    let analytics;
+    try {
+      analytics = await loadGraphAnalytics();
+    } catch (err) {
+      $("#graph-stats").textContent =
+        `${err.message} — rebuild/restart the API and run graph_rebuild if normalized docs exist but the graph is empty.`;
+      return;
+    }
+
+    const data = await api(`/v1/graph/entities?q=${encodeURIComponent(q)}&limit=40`);
+    let entities = data.entities || [];
+    if (!entities.length && analytics.hubs?.length) {
+      entities = analytics.hubs.map((h) => ({
+        id: h.id,
+        label: h.label,
+        kind: h.kind,
+        documents: h.documents,
+      }));
+    }
     $("#graph-entities").innerHTML =
       entities
         .map(
           (e) => `<button type="button" class="entity-chip" data-entity="${escapeHtml(e.id)}" data-kind="${escapeHtml(e.kind)}">
             <span>${escapeHtml(e.label)}</span>
-            <small>${escapeHtml(e.kind)} · ${e.documents}</small>
+            <small>${escapeHtml(e.kind)} · ${e.documents ?? e.degree ?? 0}</small>
           </button>`,
         )
-        .join("") || "<p class='status'>No entities yet. Ingest documents or run graph_rebuild.</p>";
+        .join("") ||
+      "<p class='status'>No entities yet. Ingest documents or run job graph_rebuild.</p>";
 
-    const kindCounts = {};
-    for (const e of entities) kindCounts[e.kind] = (kindCounts[e.kind] || 0) + 1;
-    renderBarChart(
-      $("#graph-kind-chart"),
-      Object.entries(kindCounts).map(([label, value]) => ({ label, value })),
-    );
+    fillEntitySelect($("#graph-path-from"), entities, entities[0]?.id);
+    fillEntitySelect($("#graph-path-to"), entities, entities[1]?.id || entities[0]?.id);
 
     if (!state.graphSim) state.graphSim = createForceGraph($("#graph-canvas"));
-    if (entities.length) {
-      await selectEntity(state.selectedEntity && entities.some((e) => e.id === state.selectedEntity)
-        ? state.selectedEntity
-        : entities[0].id);
-    } else {
-      state.graphSim.setData({ nodes: [], links: [] });
-      $("#graph-detail").innerHTML = "";
+
+    if (mode === "path") {
+      $("#graph-detail").innerHTML = `<p class="status">Choose two entities and run Find path.</p>`;
+      if (entities.length >= 2) await runPathFind();
+      return;
     }
+    if (mode === "neighborhood" || q) {
+      const focus =
+        state.selectedEntity && entities.some((e) => e.id === state.selectedEntity)
+          ? state.selectedEntity
+          : entities[0]?.id;
+      if (focus) await selectEntity(focus);
+      else {
+        state.graphSim.setData({ nodes: [], links: [] });
+        $("#graph-detail").innerHTML = "";
+        renderProfile(null);
+      }
+      return;
+    }
+    await showOverview();
   } catch (err) {
     $("#graph-stats").textContent = err.message;
   }
@@ -933,13 +1201,25 @@ function wire() {
   });
   $("#graph-form").addEventListener("submit", (e) => {
     e.preventDefault();
+    if ($("#graph-mode")) $("#graph-mode").value = "neighborhood";
     state.selectedEntity = null;
     loadGraph();
   });
   $("#graph-entities").addEventListener("click", (e) => {
     const button = e.target.closest("[data-entity]");
-    if (button) selectEntity(button.dataset.entity);
+    if (button) selectEntity(button.dataset.entity, { mode: "neighborhood" });
   });
+  $("#graph-profile")?.addEventListener("click", (e) => {
+    const button = e.target.closest("[data-entity]");
+    if (button) selectEntity(button.dataset.entity, { mode: "neighborhood" });
+  });
+  $("#graph-mode")?.addEventListener("change", () => {
+    state.selectedEntity = null;
+    loadGraph();
+  });
+  $("#graph-relation")?.addEventListener("change", () => loadGraph());
+  $("#graph-refresh")?.addEventListener("click", () => loadGraph());
+  $("#graph-path-run")?.addEventListener("click", () => runPathFind());
   $("#graph-detail").addEventListener("click", async (e) => {
     const correlate = e.target.closest("[data-correlate]");
     const spatial = e.target.closest("[data-spatial]");

@@ -106,6 +106,28 @@ def graph_stats():
     return graph().stats()
 
 
+@app.get("/v1/graph/analytics")
+def graph_analytics(hub_limit: int = Query(default=15, ge=5, le=50)):
+    return graph().analytics(hub_limit)
+
+
+@app.get("/v1/graph/overview")
+def graph_overview(
+    limit: int = Query(default=40, ge=5, le=100),
+    relation: str = Query(default="", max_length=64),
+):
+    return graph().overview(limit, relation.strip())
+
+
+@app.get("/v1/graph/path")
+def graph_path(
+    source: str = Query(min_length=8, max_length=64),
+    target: str = Query(min_length=8, max_length=64),
+    max_depth: int = Query(default=6, ge=1, le=10),
+):
+    return graph().shortest_path(source, target, max_depth)
+
+
 @app.get("/v1/graph/entities")
 def graph_entities(q: str = Query(default="", max_length=200),
                    limit: int = Query(default=50, ge=1, le=200)):
@@ -114,7 +136,11 @@ def graph_entities(q: str = Query(default="", max_length=200),
 
 @app.get("/v1/graph/entities/{entity_id}")
 def graph_neighbors(entity_id: str, limit: int = Query(default=100, ge=1, le=500)):
-    return graph().neighborhood(entity_id, limit)
+    profile = graph().entity_profile(entity_id)
+    if profile is None:
+        raise HTTPException(404, "Entity not found")
+    neighborhood = graph().neighborhood(entity_id, limit)
+    return neighborhood | {"profile": profile}
 
 
 @app.get("/v1/graph/documents/{sha256}")
