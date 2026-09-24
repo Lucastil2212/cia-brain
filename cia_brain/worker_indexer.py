@@ -14,7 +14,10 @@ async def main_async():
     atexit.register(store.flush)
 
     async def handler(payload: dict):
-        await asyncio.to_thread(store.index_normalized, payload["normalized_path"])
+        from .paths import path_under
+
+        normalized = path_under(payload["normalized_path"], s.normalized_dir)
+        await asyncio.to_thread(store.index_normalized, str(normalized))
 
     try:
         await consume_forever(s, "cia.extracted", "indexer-v1", handler)

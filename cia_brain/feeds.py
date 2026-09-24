@@ -60,7 +60,12 @@ def _parse_rss_date(value: str | None) -> str | None:
 
 def parse_rss(body: bytes) -> list[dict]:
     """Parse RSS 2.0 / Atom feeds into structured records."""
-    root = ET.fromstring(body)
+    try:
+        from defusedxml import ElementTree as SafeET
+
+        root = SafeET.fromstring(body)
+    except ImportError:
+        root = ET.fromstring(body)
     records = []
     # Atom
     for entry in root.findall("atom:entry", XML_NS) or root.findall(
@@ -293,6 +298,8 @@ class FeedPoller:
                         retry_after = min(86400, int(response.headers.get("Retry-After", "0")))
                     except ValueError:
                         pass
+                if 300 <= response.status_code < 400:
+                    raise ValueError(f"Unexpected redirect HTTP {response.status_code}")
                 response.raise_for_status()
                 body = bytearray()
                 async for chunk in response.aiter_bytes():

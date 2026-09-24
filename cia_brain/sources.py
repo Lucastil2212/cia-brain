@@ -174,23 +174,29 @@ def catalog(settings) -> list[dict]:
 
 def archive_url_allowed(url: str, settings) -> bool:
     """Scope catalog archives to collections; permit linked government attachments."""
+    from posixpath import normpath
+
     parts = urlsplit(url)
     host = parts.hostname
     if host in {x.strip().lower() for x in settings.allowed_hosts.split(",")}:
         return True
     selected = {x.strip() for x in settings.archive_sources.split(",") if x.strip()}
+    path = normpath(parts.path or "/")
+    if ".." in path.split("/"):
+        return False
     for source in selected_sources(settings.archive_sources, True):
         root = urlsplit(source.url)
         if host == root.hostname:
             # Host-wide FOIA vaults / CRS product library.
             if source.id in {"fbi", "crs"}:
                 return True
+            root_path = normpath(root.path or "/")
             return (
-                parts.path.startswith(root.path.rstrip("/") + "/")
-                or parts.path.rstrip("/") == root.path.rstrip("/")
-                or parts.path.startswith("/files/")
-                or "/foia" in parts.path.lower()
-                or "/readingroom" in parts.path.lower().replace("-", "")
+                path.startswith(root_path.rstrip("/") + "/")
+                or path.rstrip("/") == root_path.rstrip("/")
+                or path.startswith("/files/")
+                or "/foia" in path.lower()
+                or "/readingroom" in path.lower().replace("-", "")
             )
     for source_id, extras in ATTACHMENT_HOSTS.items():
         if source_id in selected and host in extras:

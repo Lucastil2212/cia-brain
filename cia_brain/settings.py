@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+log = logging.getLogger(__name__)
+
+# Rejected when DATABASE_URL or AUTH_REQUIRED is enabled (compose uses a distinct local secret).
+WEAK_JWT_SECRETS = frozenset(
+    {
+        "",
+        "dev-only-change-me",
+        "change-me",
+        "secret",
+        "jwt-secret",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -22,11 +36,14 @@ class Settings(BaseSettings):
     jwt_ttl_hours: int = 12
     auth_required: bool = False
     allow_registration: bool = True
+    # Comma-separated browser origins; empty disables cross-origin CORS (same-origin UI only).
+    cors_origins: str = ""
     password_scrypt_n: int = 2**14
     api_rate_limit_per_minute: int = 60
     api_rate_limit_per_day: int = 5000
     anon_rate_limit_per_minute: int = 30
     anon_rate_limit_per_day: int = 1000
+    auth_rate_limit_per_minute: int = 10
 
     crawler_user_agent: str = "ManticoreEducationalArchiver/1.0"
     crawler_contact: str = ""
@@ -44,7 +61,8 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = 90.0
     max_retries: int = 5
     max_depth: int = 40
-    max_file_bytes: int = 0
+    # Default 100 MiB; set 0 only if you intentionally want uncapped bodies.
+    max_file_bytes: int = 100_000_000
     recrawl_after_hours: int = 168
     min_free_disk_gb: float = 5.0
 
@@ -121,6 +139,25 @@ class Settings(BaseSettings):
             self.data_dir / "models",
         ):
             p.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [x.strip() for x in self.cors_origins.split(",") if x.strip()]
+
+
+def assert_secure_settings(settings: Settings) -> None:
+    """Fail closed when accounts/auth are enabled with a known-weak JWT secret."""
+    needs_secret = bool((settings.database_url or "").strip()) or settings.auth_required
+    if not needs_secret:
+        return
+    secret = (settings.jwt_secret or "").strip()
+    if secret in WEAK_JWT_SECRETS:
+        raise RuntimeError(
+            "JWT_SECRET must be a strong unique value when DATABASE_URL or AUTH_REQUIRED is set "
+            "(refusing default/empty secrets)"
+        )
+    if settings.auth_required and len(secret) < 24:
+        raise RuntimeError("JWT_SECRET must be at least 24 characters when AUTH_REQUIRED=true")
 
 
 @lru_cache(maxsize=1)

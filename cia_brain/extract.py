@@ -166,10 +166,13 @@ def extract_text(path: Path, mime: str, settings: Settings) -> tuple[str, str]:
 
 
 def normalize_document(payload: dict, settings: Settings) -> ExtractedEvent:
-    src = Path(payload["path"])
+    from .paths import normalized_cas_path, path_under, require_sha256
+
+    digest = require_sha256(payload.get("sha256", ""))
+    src = path_under(payload["path"], settings.raw_dir)
     title, text = extract_text(src, payload.get("mime", ""), settings)
     source_urls = [payload["final_url"]]
-    manifest_path = settings.manifests_dir / payload["sha256"][:2] / f"{payload['sha256']}.json"
+    manifest_path = settings.manifests_dir / digest[:2] / f"{digest}.json"
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -184,7 +187,7 @@ def normalize_document(payload: dict, settings: Settings) -> ExtractedEvent:
         "source_url": payload["final_url"],
         "source_urls": source_urls,
         "requested_url": payload["url"],
-        "source_sha256": payload["sha256"],
+        "source_sha256": digest,
         "mime": payload.get("mime", ""),
         "size": payload.get("size", 0),
         "fetched_at": payload.get("fetched_at"),
@@ -207,7 +210,7 @@ def normalize_document(payload: dict, settings: Settings) -> ExtractedEvent:
         doc["title"] = title = payload.get("title", "Public source image")
         doc["text"] = text = title + " — image archived; visual content not interpreted."
         doc["text_chars"] = len(text)
-    out = settings.normalized_dir / payload["sha256"][:2] / f"{payload['sha256']}.json.gz"
+    out = normalized_cas_path(settings, digest)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".tmp")
     with gzip.open(tmp, "wt", encoding="utf-8") as f:

@@ -12,21 +12,32 @@ from .ratelimit import check_rate_limit
 from .settings import Settings
 
 
+PUBLIC_EXACT = {"/", "/healthz", "/docs", "/redoc", "/openapi.json"}
 PUBLIC_PREFIXES = (
-    "/healthz",
-    "/docs",
-    "/redoc",
-    "/openapi.json",
     "/assets/",
     "/v1/auth/register",
     "/v1/auth/login",
 )
+# Always authenticated (when DB configured) and rate-limited, even if auth_required is false.
+AUTH_RATE_LIMITED = ("/v1/auth/login", "/v1/auth/register")
 
 
 def _is_public(path: str) -> bool:
-    if path == "/" or path in {"/healthz", "/docs", "/redoc", "/openapi.json"}:
+    if path in PUBLIC_EXACT:
         return True
     return any(path.startswith(p) for p in PUBLIC_PREFIXES)
+
+
+def _is_api_surface(path: str) -> bool:
+    return path.startswith("/v1/") or path.startswith("/agent")
+
+
+def _requires_auth_always(path: str) -> bool:
+    if path == "/v1/pipeline/jobs/trigger":
+        return True
+    if path.startswith("/v1/pipeline/jobs/") and path.endswith("/run"):
+        return True
+    return False
 
 
 class AuthRateLimitMiddleware(BaseHTTPMiddleware):
@@ -38,12 +49,20 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         request.state.principal = None
 
-        if request.method == "OPTIONS" or _is_public(path) or not path.startswith("/v1/"):
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        # Static UI and health — no auth/rate-limit.
+        if path in PUBLIC_EXACT or path.startswith("/assets/"):
+            return await call_next(request)
+
+        if not _is_api_surface(path):
             return await call_next(request)
 
         principal = None
         api_key_header = request.headers.get("x-api-key") or ""
         auth_header = request.headers.get("authorization") or ""
+        is_auth_endpoint = any(path.startswith(p) for p in AUTH_RATE_LIMITED)
 
         if api_key_header and database_configured(self.s):
             principal = auth.resolve_api_key(api_key_header, settings=self.s)
@@ -69,7 +88,12 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
             except Exception:
                 return JSONResponse({"detail": "Invalid or expired token"}, status_code=401)
 
-        if self.s.auth_required and principal is None:
+        must_auth = (
+            (self.s.auth_required and not is_auth_endpoint)
+            or (_requires_auth_always(path) and database_configured(self.s))
+            or (path.startswith("/agent") and database_configured(self.s))
+        )
+        if must_auth and principal is None:
             return JSONResponse(
                 {
                     "detail": "Authentication required. Use X-API-Key or Authorization: Bearer <jwt>.",
@@ -78,7 +102,11 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         client = request.client.host if request.client else "unknown"
-        if principal:
+        if is_auth_endpoint:
+            bucket = f"auth:{client}"
+            per_min = self.s.auth_rate_limit_per_minute
+            per_day = self.s.auth_rate_limit_per_minute * 20
+        elif principal:
             bucket = f"key:{principal.get('key_id') or principal['user_id']}"
             per_min = int(principal.get("rate_limit_per_minute") or self.s.api_rate_limit_per_minute)
             per_day = int(principal.get("rate_limit_per_day") or self.s.api_rate_limit_per_day)

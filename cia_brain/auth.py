@@ -169,6 +169,20 @@ def public_user(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def count_users(settings: Settings | None = None) -> int:
+    s = settings or get_settings()
+    with db_conn(s) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
+    return int(row[0]) if row else 0
+
+
+def count_admins(settings: Settings | None = None) -> int:
+    s = settings or get_settings()
+    with db_conn(s) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM users WHERE is_admin=TRUE AND is_active=TRUE").fetchone()
+    return int(row[0]) if row else 0
+
+
 def issue_token(user: dict[str, Any], settings: Settings | None = None) -> str:
     s = settings or get_settings()
     now = utcnow()

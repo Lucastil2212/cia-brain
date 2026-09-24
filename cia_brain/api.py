@@ -9,20 +9,21 @@ from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .auth_routes import router as auth_router
+from .auth_routes import require_admin, router as auth_router
 from .db import database_configured
 from .jobs import run_job
 from .log import configure_logging
 from .middleware import AuthRateLimitMiddleware
+from .paths import require_sha256
 from .scheduler import public_status, write_job_result
 from .search import HybridSearcher
-from .settings import get_settings
+from .settings import assert_secure_settings, get_settings
 
 s = get_settings()
 configure_logging(s.log_level)
@@ -31,6 +32,7 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    assert_secure_settings(s)
     if database_configured(s):
         from .auth import migrate
 
@@ -49,12 +51,14 @@ app = FastAPI(
     version="0.5.0",
     lifespan=lifespan,
 )
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_cors = s.cors_origin_list
+if _cors:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors,
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key"],
+    )
 app.add_middleware(AuthRateLimitMiddleware, settings=s)
 app.include_router(auth_router)
 _searcher: HybridSearcher | None = None
@@ -80,6 +84,13 @@ def searcher() -> HybridSearcher:
     if _searcher is None:
         _searcher = HybridSearcher(s)
     return _searcher
+
+
+def _parse_sha256(value: str) -> str:
+    try:
+        return require_sha256(value)
+    except ValueError as exc:
+        raise HTTPException(400, "invalid sha256") from exc
 
 
 @app.get("/v1/sources")
@@ -145,7 +156,8 @@ def graph_neighbors(entity_id: str, limit: int = Query(default=100, ge=1, le=500
 
 @app.get("/v1/graph/documents/{sha256}")
 def graph_document(sha256: str):
-    doc = graph().document(sha256)
+    digest = _parse_sha256(sha256)
+    doc = graph().document(digest)
     if doc is None:
         raise HTTPException(404, "Graph document not found")
     return doc
@@ -158,19 +170,18 @@ def graph_correlations(
     mode: str = Query(default="entity", pattern="^(entity|spatial|all)$"),
     radius_km: float | None = Query(default=None, ge=1, le=20000),
 ):
-    if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
-        raise HTTPException(400, "invalid sha256")
+    digest = _parse_sha256(sha256)
     kg = graph()
     radius = radius_km if radius_km is not None else s.graph_spatial_radius_km
     if mode == "spatial":
-        return kg.spatial_correlations(sha256, limit, radius)
+        return kg.spatial_correlations(digest, limit, radius)
     if mode == "all":
         return {
-            "sha256": sha256,
-            "entity": kg.correlations(sha256, limit),
-            "spatial": kg.spatial_correlations(sha256, limit, radius),
+            "sha256": digest,
+            "entity": kg.correlations(digest, limit),
+            "spatial": kg.spatial_correlations(digest, limit, radius),
         }
-    return kg.correlations(sha256, limit)
+    return kg.correlations(digest, limit)
 
 
 @app.get("/healthz")
@@ -207,16 +218,15 @@ def search(req: SearchRequest):
 
 @app.get("/v1/search")
 def search_get(
-    q: str = Query(min_length=1),
+    q: str = Query(min_length=1, max_length=2000),
     top_k: int = Query(default=12, ge=1, le=100),
     mime: str | None = None,
     since: str | None = None,
     until: str | None = None,
     sha256: str | None = None,
 ):
-    results = searcher().search(
-        q, top_k, mime=mime, since=since, until=until, sha256=sha256.lower() if sha256 else None
-    )
+    digest = _parse_sha256(sha256) if sha256 else None
+    results = searcher().search(q, top_k, mime=mime, since=since, until=until, sha256=digest)
     return {"query": q, "count": len(results), "results": results}
 
 
@@ -232,9 +242,7 @@ def list_documents(
 
 @app.get("/v1/documents/{sha256}")
 def get_document(sha256: str):
-    if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256.lower()):
-        raise HTTPException(400, "invalid sha256")
-    digest = sha256.lower()
+    digest = _parse_sha256(sha256)
     doc = searcher().document(digest)
     if not doc:
         raise HTTPException(404, "document not found")
@@ -294,7 +302,7 @@ def pipeline_jobs():
 
 
 @app.post("/v1/pipeline/jobs/trigger")
-def pipeline_trigger(req: TriggerJobRequest):
+def pipeline_trigger(req: TriggerJobRequest, _admin=Depends(require_admin)):
     result = run_job(req.job, s)
     if not result.ok and result.error and result.error.startswith("unknown"):
         raise HTTPException(404, result.error)
@@ -309,7 +317,7 @@ def pipeline_trigger(req: TriggerJobRequest):
 
 
 @app.post("/v1/pipeline/jobs/{job}/run")
-def pipeline_run_once(job: str):
+def pipeline_run_once(job: str, _admin=Depends(require_admin)):
     """Run a job without requiring the long-running scheduler process."""
     result = run_job(job, s)
     if not result.ok and result.error and result.error.startswith("unknown"):
@@ -326,12 +334,32 @@ def pipeline_run_once(job: str):
 
 @app.get("/v1/raw/{sha256}")
 def raw(sha256: str):
-    if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256.lower()):
-        raise HTTPException(400, "invalid sha256")
-    matches = list((s.raw_dir / sha256[:2] / sha256[2:4]).glob(f"{sha256}.*"))
+    digest = _parse_sha256(sha256)
+    matches = list((s.raw_dir / digest[:2] / digest[2:4]).glob(f"{digest}.*"))
     if not matches:
         raise HTTPException(404, "not found")
-    return FileResponse(matches[0])
+    path = matches[0]
+    ext = path.suffix.lower()
+    # Allow safe raster images inline for the gallery; never serve HTML/SVG as documents.
+    inline_images = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".tif": "image/tiff",
+        ".tiff": "image/tiff",
+    }
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if ext in inline_images:
+        return FileResponse(path, media_type=inline_images[ext], headers=headers)
+    headers["Content-Disposition"] = f'attachment; filename="{path.name}"'
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=path.name,
+        headers=headers,
+    )
 
 
 @app.get("/v1/config/public")
@@ -359,12 +387,18 @@ def public_config():
 
 @app.api_route("/agent/{path:path}", methods=["GET", "POST"])
 async def agent_proxy(path: str, request: Request):
-    """Proxy to the local Ollama agent so the UI stays same-origin."""
+    """Proxy to the local Ollama agent so the UI stays same-origin.
+
+    Auth and rate limits are enforced by AuthRateLimitMiddleware (/agent is an API surface).
+    """
+    # Reject path traversal / absolute URLs in the proxied path segment.
+    if not path or path.startswith("/") or ".." in path.split("/") or "://" in path:
+        raise HTTPException(400, "invalid agent path")
     url = f"{s.agent_api_url.rstrip('/')}/{path}"
     body = await request.body()
     headers = {"content-type": request.headers.get("content-type", "application/json")}
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
             upstream = await client.request(
                 request.method,
                 url,

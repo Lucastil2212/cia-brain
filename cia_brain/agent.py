@@ -6,7 +6,6 @@ from typing import Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .log import configure_logging
@@ -36,12 +35,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="CIA Brain Local Agent", version="0.2.0", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Same-origin via API proxy; no wildcard CORS.
 
 
 class ChatRequest(BaseModel):

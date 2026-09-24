@@ -62,7 +62,7 @@ services:
     <<: *app
     command: ["python", "-m", "cia_brain.api"]
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       DATABASE_URL: postgresql://cia:cia@postgres:5432/cia_brain
       JWT_SECRET: local-dev-jwt-secret-change-me
@@ -85,6 +85,7 @@ services:
     command: ["python", "-m", "cia_brain.migrate"]
     environment:
       DATABASE_URL: postgresql://cia:cia@postgres:5432/cia_brain
+      JWT_SECRET: local-dev-jwt-secret-change-me
     depends_on:
       postgres:
         condition: service_healthy
@@ -125,7 +126,7 @@ services:
     profiles: ["ai"]
     command: ["python", "-m", "cia_brain.agent"]
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
     depends_on:
       api:
         condition: service_healthy

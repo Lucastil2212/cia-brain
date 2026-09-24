@@ -46,6 +46,20 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;");
 }
 
+/** Allow only http(s) or same-origin relative URLs in href attributes. */
+function safeHref(url) {
+  const raw = String(url ?? "").trim();
+  if (!raw) return "#";
+  if (raw.startsWith("/") && !raw.startsWith("//")) return escapeHtml(raw);
+  try {
+    const u = new URL(raw, window.location.origin);
+    if (u.protocol === "http:" || u.protocol === "https:") return escapeHtml(u.href);
+  } catch {
+    /* ignore */
+  }
+  return "#";
+}
+
 function setStatus(el, msg, show = true) {
   if (!el) return;
   el.hidden = !show;
@@ -98,7 +112,7 @@ function resultCard(r, index) {
         <span>chunk ${r.chunk_no ?? 0}</span>
         <span>${escapeHtml((r.fetched_at || "").slice(0, 10))}</span>
         ${mods}
-        <a href="${escapeHtml(r.source_url)}" target="_blank" rel="noopener">source</a>
+        <a href="${safeHref(r.source_url)}" target="_blank" rel="noopener">source</a>
         <a href="/v1/raw/${escapeHtml(r.source_sha256)}" target="_blank" rel="noopener">raw</a>
         <button type="button" data-sha="${escapeHtml(r.source_sha256)}" class="linkish open-doc">open record</button>
       </div>
@@ -229,10 +243,10 @@ function multimodalBlock(doc) {
   }
   if (doc.media) {
     const links = [];
-    if (doc.media.assets) links.push(`<a href="${escapeHtml(doc.media.assets)}" target="_blank" rel="noopener">asset index</a>`);
+    if (doc.media.assets) links.push(`<a href="${safeHref(doc.media.assets)}" target="_blank" rel="noopener">asset index</a>`);
     for (const link of doc.media.links || []) {
       const href = link.href || link;
-      if (href) links.push(`<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(link.rel || "media")}</a>`);
+      if (href) links.push(`<a href="${safeHref(href)}" target="_blank" rel="noopener">${escapeHtml(link.rel || "media")}</a>`);
     }
     parts.push(`<p class="meta">Media · ${escapeHtml(doc.media.type || "reference")} · ${links.join(" · ") || "no links"}</p>`);
   }
@@ -259,7 +273,7 @@ async function openDocument(sha) {
       <div class="meta" style="margin-bottom:1rem;font-family:var(--font-mono);font-size:0.75rem;color:var(--ink-soft)">
         <div>${escapeHtml(doc.mime || "")} · ${fmtNum(doc.text_chars)} chars · fetched ${escapeHtml((doc.fetched_at || "").slice(0, 19))}
           ${doc.agency ? ` · ${escapeHtml(doc.agency)}` : ""} ${mods}</div>
-        <div><a href="${escapeHtml(doc.source_url)}" target="_blank" rel="noopener">${escapeHtml(doc.source_url)}</a></div>
+        <div><a href="${safeHref(doc.source_url)}" target="_blank" rel="noopener">${escapeHtml(doc.source_url)}</a></div>
         <div>sha256 ${escapeHtml(doc.source_sha256)} · <a href="/v1/raw/${escapeHtml(doc.source_sha256)}" target="_blank" rel="noopener">download raw</a></div>
       </div>
       ${multimodalBlock(doc)}
@@ -868,7 +882,7 @@ async function loadSources() {
         <p class="meta">${escapeHtml((s.modalities || []).join(" · "))} · ${s.enabled ? "on shelf" : "not selected"} · ${
           s.interval ? `polls every ${s.interval}s` : "robots-aware archive crawl"
         }</p>
-        <p><a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a></p>
+        <p><a href="${safeHref(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a></p>
         <p class="meta">${escapeHtml(
           s.status?.error || (s.status?.last_success ? `Last success: ${s.status.last_success}` : "No feed poll recorded"),
         )}</p>

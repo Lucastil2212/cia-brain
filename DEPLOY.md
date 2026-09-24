@@ -23,11 +23,18 @@ Separate Render workers are **not** used because disks cannot be shared between 
    - Web service `standard` (or higher) — needs RAM for FastEmbed + spaCy + ingest.
    - Disk **50 GB** (increase later if the lake grows; size can only go up).
 5. Wait for the first deploy. Open the service URL `/healthz` — expect `"ok": true` and `"database": true`.
-6. Open the site → **Account** → create your researcher account → **Mint key**.
+6. Open the site → **Account** → create your researcher account (the **first** account is admin) → **Mint key**.
 7. Store the API key offline; use it as `X-API-Key` for scripts.
-8. Optional: set `ALLOW_REGISTRATION=false` in the Render Environment after creating your admin account.
-9. Optional: trigger `frontier_seed` / `graph_rebuild` from the **Stacks** tab once the service is healthy.
+8. **Required after bootstrap:** set `ALLOW_REGISTRATION=false` in the Render Environment.
+9. Optional: trigger `frontier_seed` / `graph_rebuild` from the **Stacks** tab (admin JWT/API key required).
 10. Custom domain: Render service → Settings → Custom Domains → add DNS as instructed.
+
+## Security notes
+
+- Pipeline job triggers and `/agent` require authentication when Postgres is configured.
+- `JWT_SECRET` must not be the built-in default `dev-only-change-me` (Render generates one).
+- Leave `CORS_ORIGINS` empty unless you intentionally need cross-origin browser clients.
+- Raw archive HTML/SVG is served as downloadable `application/octet-stream` (raster images remain inline for the gallery).
 
 ## API example
 

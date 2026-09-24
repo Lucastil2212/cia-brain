@@ -75,6 +75,25 @@ class StreamingCASWriter:
             self.tmp_path.unlink(missing_ok=True)
 
 
+SENSITIVE_HEADERS = {
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+}
+
+
+def _redact_headers(headers: dict) -> dict:
+    out = {}
+    for key, value in (headers or {}).items():
+        if str(key).lower() in SENSITIVE_HEADERS:
+            out[key] = "[redacted]"
+        else:
+            out[key] = value
+    return out
+
+
 def write_manifest(settings: Settings, digest: str, payload: dict) -> Path:
     out = settings.manifests_dir / digest[:2] / f"{digest}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -89,7 +108,7 @@ def write_manifest(settings: Settings, digest: str, payload: dict) -> Path:
         "path": payload.get("path"),
         "mime": payload.get("mime"),
         "size": payload.get("size"),
-        "headers": payload.get("headers", {}),
+        "headers": _redact_headers(payload.get("headers", {})),
         "sources": [source],
     }
     if out.exists():

@@ -42,6 +42,44 @@ def is_allowed_host(url: str, hosts: set[str]) -> bool:
     return host in hosts
 
 
+def _is_public_ip(hostname: str) -> bool:
+    """Reject hosts that resolve only to private/link-local/metadata addresses."""
+    import ipaddress
+    import socket
+
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return False
+    return True
+
+
+def parse_xml(body: bytes):
+    """Parse untrusted XML with defusedxml when available."""
+    try:
+        from defusedxml import ElementTree as SafeET
+
+        return SafeET.fromstring(body)
+    except ImportError:
+        return ET.fromstring(body)
+
+
 def extract_links(html: bytes, base_url: str) -> set[str]:
     soup = BeautifulSoup(html, "html.parser")
     links: set[str] = set()
@@ -300,7 +338,11 @@ class RobotsPolicy:
             async with checked_get(self.session, url, self.settings) as resp:
                 if resp.status >= 400:
                     raise RuntimeError(f"HTTP {resp.status}")
-                text = await resp.text(errors="replace")
+                cap = max(self.settings.feed_max_bytes, 1_000_000)
+                raw = await resp.content.read(cap + 1)
+                if len(raw) > cap:
+                    raise RuntimeError("robots.txt too large")
+                text = raw.decode("utf-8", errors="replace")
             parser = RobotsRules(text, self.settings.crawler_user_agent)
         except Exception as exc:
             log.warning("robots fetch failed for %s: %s; defaulting to deny", host, exc)
@@ -341,6 +383,9 @@ async def checked_get(session, url, settings, robots=None, throttle=None, **kwar
     for hop in range(6):
         if not is_allowed_host(url, settings.allowed_host_set):
             raise ValueError("URL host is outside configured sources")
+        host = (urlsplit(url).hostname or "").lower()
+        if host and not _is_public_ip(host):
+            raise ValueError("URL resolved to a non-public address")
         if robots and not await robots.can_fetch(url):
             raise ValueError("robots_disallow")
         if hop and throttle:
@@ -389,11 +434,14 @@ class Crawler:
         await self.throttle.wait(url, robots.delay(url))
         try:
             async with checked_get(session, url, self.s, robots, self.throttle) as resp:
-                body = await resp.read()
+                cap = max(self.s.feed_max_bytes, self.s.max_file_bytes or self.s.feed_max_bytes)
+                body = await resp.content.read(cap + 1)
+                if len(body) > cap:
+                    raise ValueError("sitemap too large")
                 ctype = resp.headers.get("Content-Type", "")
             if b"<urlset" not in body[:5000] and b"<sitemapindex" not in body[:5000] and "xml" not in ctype:
                 return
-            root = ET.fromstring(body)
+            root = parse_xml(body)
             ns = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
             if root.tag.endswith("sitemapindex"):
                 for loc in root.findall(f".//{ns}loc"):

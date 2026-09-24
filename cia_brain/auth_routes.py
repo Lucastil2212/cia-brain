@@ -42,15 +42,37 @@ def current_user(request: Request) -> dict:
     return user
 
 
+def require_admin(request: Request) -> dict | None:
+    """Require an authenticated admin when accounts DB is configured.
+
+    If no admin exists yet, any authenticated user may proceed (bootstrap).
+    Without a database, local-only mode allows the call (middleware already skipped auth).
+    """
+    from .db import database_configured
+
+    if not database_configured():
+        return None
+    user = current_user(request)
+    if user["is_admin"]:
+        return user
+    if auth.count_admins() == 0:
+        return user
+    raise HTTPException(403, "Admin privileges required")
+
+
 @router.post("/register")
 def register(body: RegisterRequest):
     require_database()
     s = get_settings()
     if not s.allow_registration:
         raise HTTPException(403, "Registration is disabled")
-    if auth.get_user_by_email(body.email):
-        raise HTTPException(409, "Email already registered")
-    user = auth.create_user(body.email, body.password, body.display_name)
+    existing = auth.get_user_by_email(body.email)
+    # First account becomes admin so privileged routes are bootstrappable.
+    is_first = auth.count_users() == 0
+    if existing:
+        # Uniform message reduces account enumeration; still 409 to avoid duplicate inserts.
+        raise HTTPException(409, "Unable to register with these credentials")
+    user = auth.create_user(body.email, body.password, body.display_name, is_admin=is_first)
     token = auth.issue_token(user)
     return {"user": auth.public_user(user), "access_token": token, "token_type": "bearer"}
 

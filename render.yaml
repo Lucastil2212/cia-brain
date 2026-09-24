@@ -34,7 +34,9 @@ services:
       - key: AUTH_REQUIRED
         value: "true"
       - key: ALLOW_REGISTRATION
-        value: "true"
+        value: "true"  # set false after creating your admin account
+      - key: CORS_ORIGINS
+        value: ""
       - key: LOG_LEVEL
         value: INFO
       - key: GRAPH_ENABLED
@@ -53,6 +55,10 @@ services:
         value: "20"
       - key: ANON_RATE_LIMIT_PER_DAY
         value: "500"
+      - key: AUTH_RATE_LIMIT_PER_MINUTE
+        value: "10"
+      - key: MAX_FILE_BYTES
+        value: "100000000"
       - key: CRAWLER_USER_AGENT
         value: ManticoreEducationalArchiver/1.0
       - key: CRAWLER_CONTACT
