@@ -310,38 +310,109 @@ function createForceGraph(canvas) {
   let panning = false;
   let panLast = null;
   let onSelect = null;
+  let cssW = 640;
+  let cssH = 360;
+  let alpha = 1;
+  let settleFrames = 0;
+  let needsFit = false;
   const positions = new Map();
+  const LABEL_FONT = '11px "IBM Plex Mono", monospace';
+  const LABEL_LIMIT = 28;
+  const SURFACE = "#f3f5f3";
+  const LABEL_BG = "rgba(243,245,243,0.92)";
+
+  function nodeRadius(n) {
+    const selected = n.id === state.selectedEntity;
+    const hot = selected || n === hover;
+    return (hot ? 9 : 5.5) + Math.min(10, Math.log2(1 + (n.degree || 1)) * 1.6);
+  }
+
+  function truncateLabel(label) {
+    const text = String(label || "");
+    return text.length > LABEL_LIMIT ? `${text.slice(0, LABEL_LIMIT - 1)}…` : text;
+  }
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    const cssW = Math.max(320, rect.width || 640);
-    const cssH = Math.max(280, cssW * 0.55);
+    cssW = Math.max(320, rect.width || 640);
+    cssH = Math.max(320, Math.min(560, cssW * 0.62));
     canvas.width = Math.floor(cssW * dpr);
     canvas.height = Math.floor(cssH * dpr);
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${cssH}px`;
-    return { w: canvas.width, h: canvas.height };
+    return { w: cssW, h: cssH };
+  }
+
+  function seedPositions(count, w, h) {
+    const cx = w / 2;
+    const cy = h / 2;
+    const radius = Math.min(w, h) * 0.32;
+    return Array.from({ length: count }, (_, i) => {
+      const t = (i / Math.max(count, 1)) * Math.PI * 2;
+      const jitter = 0.75 + Math.random() * 0.5;
+      return {
+        x: cx + Math.cos(t) * radius * jitter + (Math.random() - 0.5) * 24,
+        y: cy + Math.sin(t) * radius * jitter + (Math.random() - 0.5) * 24,
+      };
+    });
+  }
+
+  function fitView({ animate = false } = {}) {
+    if (!nodes.length) {
+      scale = 1;
+      panX = 0;
+      panY = 0;
+      return;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const n of nodes) {
+      const r = nodeRadius(n) + 36;
+      minX = Math.min(minX, n.x - r);
+      minY = Math.min(minY, n.y - r);
+      maxX = Math.max(maxX, n.x + r + 110);
+      maxY = Math.max(maxY, n.y + r);
+    }
+    const bw = Math.max(80, maxX - minX);
+    const bh = Math.max(80, maxY - minY);
+    const pad = 28;
+    const nextScale = Math.min(2.4, Math.max(0.45, Math.min((cssW - pad * 2) / bw, (cssH - pad * 2) / bh)));
+    const nextPanX = (cssW - bw * nextScale) / 2 - minX * nextScale;
+    const nextPanY = (cssH - bh * nextScale) / 2 - minY * nextScale;
+    if (!animate) {
+      scale = nextScale;
+      panX = nextPanX;
+      panY = nextPanY;
+      return;
+    }
+    scale = scale * 0.7 + nextScale * 0.3;
+    panX = panX * 0.7 + nextPanX * 0.3;
+    panY = panY * 0.7 + nextPanY * 0.3;
   }
 
   function setData(payload, selectCb, { preserve = true } = {}) {
     onSelect = selectCb;
     const { w, h } = resize();
+    const incoming = payload.nodes || [];
+    const seeds = seedPositions(incoming.length, w, h);
     const map = new Map();
-    for (const n of payload.nodes || []) {
+    incoming.forEach((n, i) => {
       const prior = preserve ? positions.get(n.id) : null;
       const node = {
         id: n.id,
         label: n.label || String(n.id).slice(0, 8),
         kind: n.kind || "named_entity",
         degree: n.degree || n.weight || 1,
-        x: prior?.x ?? w * (0.2 + Math.random() * 0.6),
-        y: prior?.y ?? h * (0.2 + Math.random() * 0.6),
+        x: prior?.x ?? seeds[i].x,
+        y: prior?.y ?? seeds[i].y,
         vx: 0,
         vy: 0,
       };
       map.set(n.id, node);
-    }
+    });
     links = (payload.links || [])
       .filter((e) => map.has(e.source) && map.has(e.target))
       .map((e) => ({
@@ -352,6 +423,10 @@ function createForceGraph(canvas) {
       }));
     nodes = [...map.values()];
     for (const n of nodes) positions.set(n.id, { x: n.x, y: n.y });
+    alpha = 1;
+    settleFrames = 0;
+    needsFit = !preserve || nodes.length <= 2;
+    if (needsFit) fitView();
     if (!running) {
       running = true;
       loop();
@@ -360,86 +435,211 @@ function createForceGraph(canvas) {
   }
 
   function step() {
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
+    if (!nodes.length) return;
+    if (alpha < 0.012 && !drag) {
+      settleFrames += 1;
+      if (settleFrames === 8) fitView({ animate: false });
+      return;
+    }
+    settleFrames = 0;
+    const cx = cssW / 2;
+    const cy = cssH / 2;
     const nCount = Math.max(nodes.length, 1);
-    const repulse = Math.min(2800, 400 + nCount * 40);
+    const a = alpha;
+    const repulse = (3200 + nCount * 140) * a;
+    const linkStrength = 0.028 * a;
+    const gravity = 0.008 * a;
+
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
-        const a = nodes[i];
-        const b = nodes[j];
-        let dx = a.x - b.x;
-        let dy = a.y - b.y;
+        const na = nodes[i];
+        const nb = nodes[j];
+        let dx = na.x - nb.x;
+        let dy = na.y - nb.y;
         let dist = Math.hypot(dx, dy) || 0.01;
-        const force = repulse / (dist * dist);
+        const minDist = nodeRadius(na) + nodeRadius(nb) + 42;
+        let force = repulse / (dist * dist);
+        if (dist < minDist) force += ((minDist - dist) / minDist) * 3.2 * a;
         dx = (dx / dist) * force;
         dy = (dy / dist) * force;
-        a.vx += dx;
-        a.vy += dy;
-        b.vx -= dx;
-        b.vy -= dy;
+        na.vx += dx;
+        na.vy += dy;
+        nb.vx -= dx;
+        nb.vy -= dy;
       }
     }
+
     for (const link of links) {
-      const a = link.source;
-      const b = link.target;
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
+      const na = link.source;
+      const nb = link.target;
+      const dx = nb.x - na.x;
+      const dy = nb.y - na.y;
       const dist = Math.hypot(dx, dy) || 0.01;
-      const ideal = 90 + Math.min(80, (link.weight || 1) * 4);
-      const force = (dist - ideal) * 0.025;
+      const ideal = 160 + Math.min(140, Math.log2(1 + (link.weight || 1)) * 32);
+      const force = (dist - ideal) * linkStrength;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
-      a.vx += fx;
-      a.vy += fy;
-      b.vx -= fx;
-      b.vy -= fy;
+      na.vx += fx;
+      na.vy += fy;
+      nb.vx -= fx;
+      nb.vy -= fy;
     }
+
     for (const n of nodes) {
-      n.vx += (cx - n.x) * 0.004;
-      n.vy += (cy - n.y) * 0.004;
-      n.vx *= 0.82;
-      n.vy *= 0.82;
+      n.vx += (cx - n.x) * gravity;
+      n.vy += (cy - n.y) * gravity;
+      // Soft walls keep outliers from flying off-canvas during warm-up.
+      const margin = 48;
+      if (n.x < margin) n.vx += (margin - n.x) * 0.04 * a;
+      if (n.x > cssW - margin) n.vx -= (n.x - (cssW - margin)) * 0.04 * a;
+      if (n.y < margin) n.vy += (margin - n.y) * 0.04 * a;
+      if (n.y > cssH - margin) n.vy -= (n.y - (cssH - margin)) * 0.04 * a;
+      n.vx *= 0.78;
+      n.vy *= 0.78;
       if (drag !== n) {
         n.x += n.vx;
         n.y += n.vy;
+      } else {
+        n.vx = 0;
+        n.vy = 0;
       }
       positions.set(n.id, { x: n.x, y: n.y });
     }
+    alpha *= 0.985;
+    if (needsFit && alpha < 0.35) {
+      fitView({ animate: true });
+      if (alpha < 0.08) needsFit = false;
+    }
+  }
+
+  function labelPriority(n) {
+    if (n.id === state.selectedEntity) return 1e9;
+    if (n === hover) return 1e8;
+    return n.degree || 1;
+  }
+
+  function pickLabels() {
+    const ranked = [...nodes].sort((a, b) => labelPriority(b) - labelPriority(a));
+    const maxLabels = Math.min(14, Math.max(7, Math.floor(nodes.length * 0.35)));
+    const placed = [];
+    const visible = new Map();
+    ctx.font = LABEL_FONT;
+    for (const n of ranked) {
+      if (visible.size >= maxLabels && n !== hover && n.id !== state.selectedEntity) break;
+      const text = truncateLabel(n.label);
+      const r = nodeRadius(n);
+      const tw = ctx.measureText(text).width;
+      const th = 13;
+      const candidates = [
+        { x: n.x + r + 8, y: n.y + 4, align: "left" },
+        { x: n.x - r - 8, y: n.y + 4, align: "right" },
+        { x: n.x, y: n.y - r - 10, align: "center" },
+        { x: n.x, y: n.y + r + 16, align: "center" },
+        { x: n.x + r + 8, y: n.y - r - 6, align: "left" },
+        { x: n.x - r - 8, y: n.y - r - 6, align: "right" },
+      ];
+      let chosen = null;
+      for (const c of candidates) {
+        const left = c.align === "right" ? c.x - tw : c.align === "center" ? c.x - tw / 2 : c.x;
+        const top = c.y - th;
+        const box = { left, top, right: left + tw, bottom: top + th + 2 };
+        const hitNode = nodes.some((other) => {
+          if (other === n) return false;
+          const or = nodeRadius(other);
+          const cx = Math.max(box.left, Math.min(other.x, box.right));
+          const cy = Math.max(box.top, Math.min(other.y, box.bottom));
+          return Math.hypot(other.x - cx, other.y - cy) < or + 4;
+        });
+        if (hitNode) continue;
+        const overlap = placed.some(
+          (p) => !(box.right < p.left - 8 || box.left > p.right + 8 || box.bottom < p.top - 4 || box.top > p.bottom + 4),
+        );
+        if (!overlap) {
+          chosen = { ...c, text, box };
+          break;
+        }
+      }
+      if (!chosen && (n === hover || n.id === state.selectedEntity)) {
+        const c = candidates[0];
+        const left = c.x;
+        chosen = { ...c, text, box: { left, top: c.y - th, right: left + tw, bottom: c.y + 2 } };
+      }
+      if (chosen) {
+        placed.push(chosen.box);
+        visible.set(n.id, chosen);
+      }
+    }
+    return visible;
   }
 
   function draw() {
-    const w = canvas.width;
-    const h = canvas.height;
     const dpr = window.devicePixelRatio || 1;
-    ctx.clearRect(0, 0, w, h);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = SURFACE;
+    ctx.fillRect(0, 0, cssW, cssH);
     ctx.save();
     ctx.translate(panX, panY);
     ctx.scale(scale, scale);
+
+    const focusId = state.selectedEntity || hover?.id || null;
+    const neighborIds = new Set();
+    if (focusId) {
+      for (const link of links) {
+        if (link.source.id === focusId) neighborIds.add(link.target.id);
+        if (link.target.id === focusId) neighborIds.add(link.source.id);
+      }
+      neighborIds.add(focusId);
+    }
+
     for (const link of links) {
       const typed = link.relation && link.relation !== "co_mentioned";
+      const hot = !focusId || link.source.id === focusId || link.target.id === focusId;
       ctx.beginPath();
-      ctx.strokeStyle = typed ? "rgba(13,92,77,0.55)" : "rgba(26,46,40,0.22)";
-      ctx.lineWidth = Math.min(4, 1 + Math.log2(1 + (link.weight || 1)));
+      ctx.strokeStyle = typed
+        ? hot
+          ? "rgba(13,92,77,0.62)"
+          : "rgba(13,92,77,0.14)"
+        : hot
+          ? "rgba(26,46,40,0.32)"
+          : "rgba(26,46,40,0.1)";
+      ctx.lineWidth = Math.min(3.2, 0.85 + Math.log2(1 + (link.weight || 1)) * 0.55) / scale;
       ctx.moveTo(link.source.x, link.source.y);
       ctx.lineTo(link.target.x, link.target.y);
       ctx.stroke();
     }
-    for (const n of nodes) {
+
+    const labels = pickLabels();
+    const ordered = [...nodes].sort((a, b) => (a.degree || 1) - (b.degree || 1));
+    for (const n of ordered) {
       const selected = n.id === state.selectedEntity;
-      const r = (selected || n === hover ? 10 : 6) + Math.min(6, Math.log2(1 + (n.degree || 1)));
+      const r = nodeRadius(n);
+      const dimmed = focusId && !neighborIds.has(n.id);
       ctx.beginPath();
       ctx.fillStyle = KIND_COLORS[n.kind] || KIND_COLORS.named_entity;
+      ctx.globalAlpha = dimmed ? 0.3 : 1;
       ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
       ctx.fill();
-      if (selected) {
-        ctx.strokeStyle = "#c5a35a";
-        ctx.lineWidth = 2.5;
-        ctx.stroke();
-      }
+      ctx.strokeStyle = selected ? "#c5a35a" : n === hover ? "rgba(26,46,40,0.55)" : "rgba(243,245,243,0.9)";
+      ctx.lineWidth = (selected ? 2.4 : n === hover ? 1.5 : 1) / scale;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.font = LABEL_FONT;
+    ctx.textBaseline = "alphabetic";
+    for (const n of nodes) {
+      const label = labels.get(n.id);
+      if (!label) continue;
+      const dimmed = focusId && !neighborIds.has(n.id) && n !== hover;
+      ctx.globalAlpha = dimmed ? 0.4 : 1;
+      ctx.textAlign = label.align;
+      const padX = 4;
+      const box = label.box;
+      ctx.fillStyle = LABEL_BG;
+      ctx.fillRect(box.left - padX, box.top - 1, box.right - box.left + padX * 2, box.bottom - box.top + 1);
       ctx.fillStyle = "#1a2e28";
-      ctx.font = `${Math.round(11 * dpr)}px "IBM Plex Mono", monospace`;
-      ctx.fillText((n.label || "").slice(0, 28), n.x + r + 4, n.y + 4);
+      ctx.fillText(label.text, label.x, label.y);
+      ctx.globalAlpha = 1;
     }
     ctx.restore();
   }
@@ -452,19 +652,18 @@ function createForceGraph(canvas) {
 
   function toWorld(ev) {
     const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const x = ((ev.clientX - rect.left) * dpr - panX) / scale;
-    const y = ((ev.clientY - rect.top) * dpr - panY) / scale;
+    const x = (ev.clientX - rect.left - panX) / scale;
+    const y = (ev.clientY - rect.top - panY) / scale;
     return { x, y };
   }
 
   function hit(ev) {
     const p = toWorld(ev);
     let best = null;
-    let bestDist = 18;
+    let bestDist = Infinity;
     for (const n of nodes) {
       const d = Math.hypot(n.x - p.x, n.y - p.y);
-      if (d < bestDist) {
+      if (d <= nodeRadius(n) + 8 && d < bestDist) {
         best = n;
         bestDist = d;
       }
@@ -476,6 +675,7 @@ function createForceGraph(canvas) {
     const n = hit(ev);
     if (n) {
       drag = n;
+      alpha = Math.max(alpha, 0.25);
       canvas.setPointerCapture(ev.pointerId);
       state.selectedEntity = n.id;
       if (onSelect) onSelect(n.id, { fromCanvas: true });
@@ -492,13 +692,14 @@ function createForceGraph(canvas) {
       drag.y = p.y;
       drag.vx = 0;
       drag.vy = 0;
+      alpha = Math.max(alpha, 0.12);
     } else if (panning && panLast) {
-      const dpr = window.devicePixelRatio || 1;
-      panX += (ev.clientX - panLast.x) * dpr;
-      panY += (ev.clientY - panLast.y) * dpr;
+      panX += ev.clientX - panLast.x;
+      panY += ev.clientY - panLast.y;
       panLast = { x: ev.clientX, y: ev.clientY };
     } else {
-      hover = hit(ev);
+      const next = hit(ev);
+      if (next !== hover) hover = next;
       canvas.style.cursor = hover ? "pointer" : "grab";
     }
   });
@@ -511,19 +712,31 @@ function createForceGraph(canvas) {
     "wheel",
     (ev) => {
       ev.preventDefault();
-      const factor = ev.deltaY < 0 ? 1.08 : 0.92;
-      scale = Math.min(3.5, Math.max(0.35, scale * factor));
+      const rect = canvas.getBoundingClientRect();
+      const mx = ev.clientX - rect.left;
+      const my = ev.clientY - rect.top;
+      const factor = ev.deltaY < 0 ? 1.1 : 0.9;
+      const next = Math.min(3.5, Math.max(0.35, scale * factor));
+      const wx = (mx - panX) / scale;
+      const wy = (my - panY) / scale;
+      scale = next;
+      panX = mx - wx * scale;
+      panY = my - wy * scale;
     },
     { passive: false },
   );
   window.addEventListener("resize", () => {
-    if (nodes.length) resize();
+    if (nodes.length) {
+      resize();
+      fitView();
+    }
   });
 
   return {
     setData,
     highlight(id) {
       state.selectedEntity = id;
+      alpha = Math.max(alpha, 0.08);
     },
     destroy() {
       cancelAnimationFrame(raf);
@@ -593,20 +806,24 @@ async function showOverview() {
     `/v1/graph/overview?limit=40${relation ? `&relation=${encodeURIComponent(relation)}` : ""}`,
   );
   if (!state.graphSim) state.graphSim = createForceGraph($("#graph-canvas"));
+  const allLinks = (data.links || []).map((l) => ({
+    source: l.source,
+    target: l.target,
+    relation: l.relation,
+    weight: l.weight,
+  }));
+  // Cap dense overview edges so the canvas stays readable; keep strongest co-evidence first.
+  const maxLinks = Math.min(120, allLinks.length);
+  const links = [...allLinks].sort((a, b) => (b.weight || 1) - (a.weight || 1)).slice(0, maxLinks);
   state.graphSim.setData(
     {
       nodes: data.nodes || [],
-      links: (data.links || []).map((l) => ({
-        source: l.source,
-        target: l.target,
-        relation: l.relation,
-        weight: l.weight,
-      })),
+      links,
     },
     (id) => selectEntity(id, { mode: "neighborhood" }),
     { preserve: false },
   );
-  $("#graph-detail").innerHTML = `<p class="status">${fmtNum((data.nodes || []).length)} hubs · ${fmtNum((data.links || []).length)} weighted links · ${escapeHtml(data.method || "")}</p>`;
+  $("#graph-detail").innerHTML = `<p class="status">${fmtNum((data.nodes || []).length)} hubs · ${fmtNum(links.length)} of ${fmtNum(allLinks.length)} weighted links · ${escapeHtml(data.method || "")}</p>`;
   if ((data.nodes || []).length && !state.selectedEntity) {
     state.selectedEntity = data.nodes[0].id;
   }

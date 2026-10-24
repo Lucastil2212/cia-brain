@@ -17,12 +17,9 @@ from pydantic import BaseModel, Field
 
 from .auth_routes import require_admin, router as auth_router
 from .db import database_configured
-from .jobs import run_job
 from .log import configure_logging
 from .middleware import AuthRateLimitMiddleware
 from .paths import require_sha256
-from .scheduler import public_status, write_job_result
-from .search import HybridSearcher
 from .settings import assert_secure_settings, get_settings
 
 s = get_settings()
@@ -61,7 +58,7 @@ if _cors:
     )
 app.add_middleware(AuthRateLimitMiddleware, settings=s)
 app.include_router(auth_router)
-_searcher: HybridSearcher | None = None
+_searcher = None
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
@@ -79,11 +76,28 @@ class TriggerJobRequest(BaseModel):
     job: str = Field(min_length=1, max_length=64)
 
 
-def searcher() -> HybridSearcher:
+def searcher():
     global _searcher
     if _searcher is None:
+        try:
+            from .search import HybridSearcher
+        except ImportError as exc:
+            raise HTTPException(
+                503, "Search is unavailable until the pipeline extra is installed"
+            ) from exc
         _searcher = HybridSearcher(s)
     return _searcher
+
+
+def _pipeline():
+    try:
+        from .jobs import run_job
+        from .scheduler import public_status, write_job_result
+    except ImportError as exc:
+        raise HTTPException(
+            503, "Pipeline jobs are unavailable until the pipeline extra is installed"
+        ) from exc
+    return run_job, public_status, write_job_result
 
 
 def _parse_sha256(value: str) -> str:
@@ -298,11 +312,13 @@ def crawl_stats():
 
 @app.get("/v1/pipeline/jobs")
 def pipeline_jobs():
+    _run_job, public_status, _write_job_result = _pipeline()
     return public_status(s)
 
 
 @app.post("/v1/pipeline/jobs/trigger")
 def pipeline_trigger(req: TriggerJobRequest, _admin=Depends(require_admin)):
+    run_job, _public_status, write_job_result = _pipeline()
     result = run_job(req.job, s)
     if not result.ok and result.error and result.error.startswith("unknown"):
         raise HTTPException(404, result.error)
@@ -319,6 +335,7 @@ def pipeline_trigger(req: TriggerJobRequest, _admin=Depends(require_admin)):
 @app.post("/v1/pipeline/jobs/{job}/run")
 def pipeline_run_once(job: str, _admin=Depends(require_admin)):
     """Run a job without requiring the long-running scheduler process."""
+    run_job, _public_status, write_job_result = _pipeline()
     result = run_job(job, s)
     if not result.ok and result.error and result.error.startswith("unknown"):
         raise HTTPException(404, result.error)

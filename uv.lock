@@ -204,29 +204,13 @@ name = "cia-brain"
 version = "0.5.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aiohttp" },
-    { name = "beautifulsoup4" },
-    { name = "defusedxml" },
-    { name = "duckdb" },
     { name = "email-validator" },
     { name = "fastapi" },
-    { name = "fastembed" },
     { name = "httpx" },
-    { name = "nats-py" },
-    { name = "numpy" },
-    { name = "openpyxl" },
-    { name = "pandas" },
     { name = "psycopg", extra = ["binary", "pool"] },
-    { name = "pyarrow" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
-    { name = "pypdf" },
-    { name = "python-docx" },
     { name = "python-multipart" },
-    { name = "python-pptx" },
-    { name = "tomli-w" },
-    { name = "trafilatura" },
-    { name = "usearch" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -238,38 +222,56 @@ dev = [
 ner = [
     { name = "spacy" },
 ]
+pipeline = [
+    { name = "aiohttp" },
+    { name = "beautifulsoup4" },
+    { name = "defusedxml" },
+    { name = "duckdb" },
+    { name = "fastembed" },
+    { name = "nats-py" },
+    { name = "numpy" },
+    { name = "openpyxl" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "pypdf" },
+    { name = "python-docx" },
+    { name = "python-pptx" },
+    { name = "tomli-w" },
+    { name = "trafilatura" },
+    { name = "usearch" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10,<4" },
-    { name = "beautifulsoup4", specifier = ">=4.12,<5" },
-    { name = "defusedxml", specifier = ">=0.7,<1" },
-    { name = "duckdb", specifier = ">=1.1,<2" },
+    { name = "aiohttp", marker = "extra == 'pipeline'", specifier = ">=3.10,<4" },
+    { name = "beautifulsoup4", marker = "extra == 'pipeline'", specifier = ">=4.12,<5" },
+    { name = "defusedxml", marker = "extra == 'pipeline'", specifier = ">=0.7,<1" },
+    { name = "duckdb", marker = "extra == 'pipeline'", specifier = ">=1.1,<2" },
     { name = "email-validator", specifier = ">=2.0,<3" },
     { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "fastembed", specifier = ">=0.7,<1" },
+    { name = "fastembed", marker = "extra == 'pipeline'", specifier = ">=0.7,<1" },
     { name = "httpx", specifier = ">=0.27,<1" },
-    { name = "nats-py", specifier = ">=2.9,<3" },
-    { name = "numpy", specifier = ">=2.0,<3" },
-    { name = "openpyxl", specifier = ">=3.1,<4" },
-    { name = "pandas", specifier = ">=2.2,<3" },
+    { name = "nats-py", marker = "extra == 'pipeline'", specifier = ">=2.9,<3" },
+    { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=2.0,<3" },
+    { name = "openpyxl", marker = "extra == 'pipeline'", specifier = ">=3.1,<4" },
+    { name = "pandas", marker = "extra == 'pipeline'", specifier = ">=2.2,<3" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2,<4" },
-    { name = "pyarrow", specifier = ">=18,<21" },
+    { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=18,<21" },
     { name = "pydantic-settings", specifier = ">=2.6,<3" },
     { name = "pyjwt", specifier = ">=2.9,<3" },
-    { name = "pypdf", specifier = ">=5,<7" },
+    { name = "pypdf", marker = "extra == 'pipeline'", specifier = ">=5,<7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
-    { name = "python-docx", specifier = ">=1.1,<2" },
+    { name = "python-docx", marker = "extra == 'pipeline'", specifier = ">=1.1,<2" },
     { name = "python-multipart", specifier = ">=0.0.12,<1" },
-    { name = "python-pptx", specifier = ">=1.0,<2" },
+    { name = "python-pptx", marker = "extra == 'pipeline'", specifier = ">=1.0,<2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8,<1" },
     { name = "spacy", marker = "extra == 'ner'", specifier = ">=3.7,<4" },
-    { name = "tomli-w", specifier = ">=1.1,<2" },
-    { name = "trafilatura", specifier = ">=2.0,<3" },
-    { name = "usearch", specifier = ">=2.16,<3" },
+    { name = "tomli-w", marker = "extra == 'pipeline'", specifier = ">=1.1,<2" },
+    { name = "trafilatura", marker = "extra == 'pipeline'", specifier = ">=2.0,<3" },
+    { name = "usearch", marker = "extra == 'pipeline'", specifier = ">=2.16,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32,<1" },
 ]
-provides-extras = ["dev", "ner"]
+provides-extras = ["dev", "ner", "pipeline"]
 
 [[package]]
 name = "click"

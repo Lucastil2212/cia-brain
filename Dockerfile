@@ -25,7 +25,7 @@ COPY ui /app/ui
 COPY dags /app/dags
 COPY tests /app/tests
 COPY scripts /app/scripts
-RUN pip install --upgrade pip && pip install ".[ner]" \
+RUN pip install --upgrade pip && pip install ".[pipeline,ner]" \
     && python -m spacy download en_core_web_sm \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin app \
     && mkdir -p /data/raw /data/manifests /data/normalized /data/parquet /data/state /data/models /data/nats \

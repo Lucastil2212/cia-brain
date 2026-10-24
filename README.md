@@ -85,7 +85,7 @@ Interactive API docs are at `http://localhost:8080/docs`.
 
 ## Vercel deployment
 
-The repository includes a root `app.py` entrypoint for Vercel's zero-configuration FastAPI runtime and pins Python 3.12 in `pyproject.toml`.
+The repository includes a root `app.py` entrypoint for Vercel's zero-configuration FastAPI runtime and pins Python 3.12 in `pyproject.toml`. Vercel installs the base dependencies only. Crawl, extract, and embedding packages live in the `pipeline` extra so the function stays under the 500 MB bundle limit. Docker and Render install `.[pipeline,ner]`.
 
 On Vercel, `DATA_DIR` defaults to `/tmp/cia-brain`, which is writable but **ephemeral**. This lets the FastAPI application and web UI boot cleanly for a serverless deployment, including an empty search store before any index exists.
 

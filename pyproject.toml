@@ -4,35 +4,39 @@ version = "0.5.0"
 description = "Public government archives, live multimodal feeds, local knowledge graph, hybrid search, Postgres accounts, and rate-limited API access"
 requires-python = "~=3.12.0"
 dependencies = [
-  "aiohttp>=3.10,<4",
-  "beautifulsoup4>=4.12,<5",
-  "defusedxml>=0.7,<1",
-  "duckdb>=1.1,<2",
   "email-validator>=2.0,<3",
   "fastapi>=0.115,<1",
-  "fastembed>=0.7,<1",
   "httpx>=0.27,<1",
-  "nats-py>=2.9,<3",
-  "numpy>=2.0,<3",
-  "openpyxl>=3.1,<4",
-  "pandas>=2.2,<3",
   "psycopg[binary,pool]>=3.2,<4",
-  "pyarrow>=18,<21",
   "pydantic-settings>=2.6,<3",
   "PyJWT>=2.9,<3",
-  "pypdf>=5,<7",
-  "python-docx>=1.1,<2",
   "python-multipart>=0.0.12,<1",
-  "python-pptx>=1.0,<2",
-  "tomli-w>=1.1,<2",
-  "trafilatura>=2.0,<3",
-  "usearch>=2.16,<3",
   "uvicorn[standard]>=0.32,<1",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<9", "ruff>=0.8,<1"]
 ner = ["spacy>=3.7,<4"]
+# Crawl, extract, embed, and index. Omitted from the Vercel function so the
+# bundle stays under the 500 MB serverless limit. Docker/Render install this.
+pipeline = [
+  "aiohttp>=3.10,<4",
+  "beautifulsoup4>=4.12,<5",
+  "defusedxml>=0.7,<1",
+  "duckdb>=1.1,<2",
+  "fastembed>=0.7,<1",
+  "nats-py>=2.9,<3",
+  "numpy>=2.0,<3",
+  "openpyxl>=3.1,<4",
+  "pandas>=2.2,<3",
+  "pyarrow>=18,<21",
+  "pypdf>=5,<7",
+  "python-docx>=1.1,<2",
+  "python-pptx>=1.0,<2",
+  "tomli-w>=1.1,<2",
+  "trafilatura>=2.0,<3",
+  "usearch>=2.16,<3",
+]
 
 [project.scripts]
 cia-brain = "cia_brain.cli:main"
