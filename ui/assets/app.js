@@ -1498,4 +1498,10 @@ wire();
 refreshMeta();
 loadFacets();
 loadCatalogViz();
-setInterval(refreshMeta, 30000);
+// Background tabs would otherwise exhaust the anonymous daily rate limit.
+setInterval(() => {
+  if (document.visibilityState === "visible") refreshMeta();
+}, 60000);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") refreshMeta();
+});

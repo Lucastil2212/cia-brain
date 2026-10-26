@@ -2,18 +2,82 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 from datetime import UTC, datetime, timedelta
 
-from .db import database_configured, db_conn
+from .db import DatabaseUnavailable, database_configured, db_conn
 from .settings import Settings, get_settings
 
-# In-process fallback when DATABASE_URL is absent (local compose without Postgres).
-_MEMORY: dict[tuple[str, str], tuple[datetime, int]] = {}
+log = logging.getLogger(__name__)
+
+# In-process fallback when DATABASE_URL is absent or the database is unreachable.
+_MEMORY: dict[tuple[str, str], int] = {}
+_MEMORY_LOCK = threading.Lock()
+_MEMORY_MAX_KEYS = 50_000
 
 
 def _truncate(now: datetime, seconds: int) -> datetime:
     epoch = int(now.timestamp())
     return datetime.fromtimestamp(epoch - (epoch % seconds), UTC)
+
+
+def _headers(limit: int, remaining: int, reset_at: datetime) -> dict[str, str]:
+    return {
+        "X-RateLimit-Limit": str(limit),
+        "X-RateLimit-Remaining": str(max(0, remaining)),
+        "X-RateLimit-Reset": str(int(reset_at.timestamp())),
+    }
+
+
+def _prune_memory(now: datetime) -> None:
+    cutoff = (now - timedelta(days=2)).isoformat()
+    for key in [k for k in _MEMORY if k[1] < cutoff]:
+        del _MEMORY[key]
+
+
+def _memory_check(
+    bucket_key: str, limit: int, window_start: datetime, reset_at: datetime, now: datetime
+) -> tuple[bool, dict[str, str]]:
+    key = (bucket_key, window_start.isoformat())
+    with _MEMORY_LOCK:
+        if len(_MEMORY) > _MEMORY_MAX_KEYS:
+            _prune_memory(now)
+        count = _MEMORY.get(key, 0)
+        if count >= limit:
+            return False, _headers(limit, 0, reset_at)
+        _MEMORY[key] = count + 1
+    return True, _headers(limit, limit - (count + 1), reset_at)
+
+
+def _db_check(
+    bucket_key: str,
+    limit: int,
+    window_start: datetime,
+    reset_at: datetime,
+    now: datetime,
+    s: Settings,
+) -> tuple[bool, dict[str, str]]:
+    with db_conn(s) as conn:
+        conn.execute(
+            "DELETE FROM rate_buckets WHERE window_start < %s",
+            (now - timedelta(days=2),),
+        )
+        # Single upsert avoids the read-then-write race between concurrent requests.
+        row = conn.execute(
+            """
+            INSERT INTO rate_buckets(bucket_key, window_start, count) VALUES (%s, %s, 1)
+            ON CONFLICT (bucket_key, window_start)
+            DO UPDATE SET count = rate_buckets.count + 1
+            WHERE rate_buckets.count < %s
+            RETURNING count
+            """,
+            (bucket_key, window_start, limit),
+        ).fetchone()
+    if row is None:
+        return False, _headers(limit, 0, reset_at)
+    count = int(row[0])
+    return True, _headers(limit, limit - count, reset_at)
 
 
 def check_rate_limit(
@@ -32,55 +96,12 @@ def check_rate_limit(
     reset_at = window_start + timedelta(seconds=window_seconds)
 
     if not database_configured(s):
-        key = (bucket_key, window_start.isoformat())
-        started, count = _MEMORY.get(key, (window_start, 0))
-        if started != window_start:
-            count = 0
-        if count >= limit:
-            headers = {
-                "X-RateLimit-Limit": str(limit),
-                "X-RateLimit-Remaining": "0",
-                "X-RateLimit-Reset": str(int(reset_at.timestamp())),
-            }
-            return False, headers
-        _MEMORY[key] = (window_start, count + 1)
-        remaining = max(0, limit - (count + 1))
-        return True, {
-            "X-RateLimit-Limit": str(limit),
-            "X-RateLimit-Remaining": str(remaining),
-            "X-RateLimit-Reset": str(int(reset_at.timestamp())),
-        }
-
-    with db_conn(s) as conn:
-        # Drop old windows opportunistically.
-        conn.execute(
-            "DELETE FROM rate_buckets WHERE window_start < %s",
-            (now - timedelta(days=2),),
-        )
-        row = conn.execute(
-            "SELECT count FROM rate_buckets WHERE bucket_key=%s AND window_start=%s",
-            (bucket_key, window_start),
-        ).fetchone()
-        count = int(row[0]) if row else 0
-        if count >= limit:
-            return False, {
-                "X-RateLimit-Limit": str(limit),
-                "X-RateLimit-Remaining": "0",
-                "X-RateLimit-Reset": str(int(reset_at.timestamp())),
-            }
-        if row:
-            conn.execute(
-                "UPDATE rate_buckets SET count=count+1 WHERE bucket_key=%s AND window_start=%s",
-                (bucket_key, window_start),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO rate_buckets(bucket_key, window_start, count) VALUES (%s,%s,1)",
-                (bucket_key, window_start),
-            )
-        remaining = max(0, limit - (count + 1))
-        return True, {
-            "X-RateLimit-Limit": str(limit),
-            "X-RateLimit-Remaining": str(remaining),
-            "X-RateLimit-Reset": str(int(reset_at.timestamp())),
-        }
+        return _memory_check(bucket_key, limit, window_start, reset_at, now)
+    try:
+        return _db_check(bucket_key, limit, window_start, reset_at, now, s)
+    except DatabaseUnavailable:
+        return _memory_check(bucket_key, limit, window_start, reset_at, now)
+    except Exception as exc:
+        # Rate limiting must never take the API down with it.
+        log.warning("rate limit store unavailable, using in-memory limits: %s", exc)
+        return _memory_check(bucket_key, limit, window_start, reset_at, now)

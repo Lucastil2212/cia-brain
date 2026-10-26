@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -32,6 +33,12 @@ class Settings(BaseSettings):
     # Postgres accounts / API keys (optional locally; required on Render)
     database_url: str = ""
     db_pool_max: int = 8
+    # Keep these short: an unreachable database must degrade requests, not hang them.
+    db_connect_timeout_seconds: int = 5
+    db_pool_timeout_seconds: float = 5.0
+    db_retry_after_seconds: float = 30.0
+    # Vercel and Render terminate TLS at a proxy that overwrites X-Forwarded-For.
+    trust_proxy_headers: bool = bool(os.getenv("VERCEL") or os.getenv("RENDER"))
     jwt_secret: str = "dev-only-change-me"
     jwt_ttl_hours: int = 12
     auth_required: bool = False
@@ -129,15 +136,30 @@ class Settings(BaseSettings):
     def state_dir(self) -> Path:
         return self.data_dir / "state"
 
-    def ensure_dirs(self) -> None:
-        for p in (
+    def _lake_dirs(self) -> tuple[Path, ...]:
+        return (
             self.raw_dir,
             self.manifests_dir,
             self.normalized_dir,
             self.parquet_dir,
             self.state_dir,
             self.data_dir / "models",
-        ):
+        )
+
+    def ensure_dirs(self) -> None:
+        try:
+            for p in self._lake_dirs():
+                p.mkdir(parents=True, exist_ok=True)
+            return
+        except OSError as exc:
+            fallback = Path(tempfile.gettempdir()) / "cia-brain"
+            if self.data_dir == fallback:
+                raise
+            log.warning(
+                "DATA_DIR %s is not writable (%s); using ephemeral %s", self.data_dir, exc, fallback
+            )
+            self.data_dir = fallback
+        for p in self._lake_dirs():
             p.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -145,19 +167,27 @@ class Settings(BaseSettings):
         return [x.strip() for x in self.cors_origins.split(",") if x.strip()]
 
 
-def assert_secure_settings(settings: Settings) -> None:
-    """Fail closed when accounts/auth are enabled with a known-weak JWT secret."""
+def insecure_settings_reason(settings: Settings) -> str | None:
+    """Describe why accounts/auth cannot safely run with this configuration, if they cannot."""
     needs_secret = bool((settings.database_url or "").strip()) or settings.auth_required
     if not needs_secret:
-        return
+        return None
     secret = (settings.jwt_secret or "").strip()
     if secret in WEAK_JWT_SECRETS:
-        raise RuntimeError(
+        return (
             "JWT_SECRET must be a strong unique value when DATABASE_URL or AUTH_REQUIRED is set "
             "(refusing default/empty secrets)"
         )
     if settings.auth_required and len(secret) < 24:
-        raise RuntimeError("JWT_SECRET must be at least 24 characters when AUTH_REQUIRED=true")
+        return "JWT_SECRET must be at least 24 characters when AUTH_REQUIRED=true"
+    return None
+
+
+def assert_secure_settings(settings: Settings) -> None:
+    """Fail closed when accounts/auth are enabled with a known-weak JWT secret."""
+    reason = insecure_settings_reason(settings)
+    if reason:
+        raise RuntimeError(reason)
 
 
 @lru_cache(maxsize=1)

@@ -5,36 +5,45 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .auth_routes import require_admin, router as auth_router
-from .db import database_configured
+from .db import DatabaseUnavailable, database_configured, database_problem, disable_database
 from .log import configure_logging
 from .middleware import AuthRateLimitMiddleware
 from .paths import require_sha256
-from .settings import assert_secure_settings, get_settings
+from .settings import get_settings, insecure_settings_reason
 
 s = get_settings()
 configure_logging(s.log_level)
 log = logging.getLogger(__name__)
 
+# Refuse account features rather than crash the whole app (and every static asset with it).
+_insecure = insecure_settings_reason(s)
+if _insecure:
+    log.error("%s; account features are disabled until this is fixed", _insecure)
+    disable_database(_insecure)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    assert_secure_settings(s)
-    if database_configured(s):
+    if database_configured(s) and database_problem() is None:
         from .auth import migrate
 
-        migrate(s)
-        log.info("account schema migrated")
+        try:
+            migrate(s)
+            log.info("account schema migrated")
+        except DatabaseUnavailable as exc:
+            log.warning("account schema migration deferred: %s", exc)
     yield
 
 
@@ -59,6 +68,25 @@ if _cors:
 app.add_middleware(AuthRateLimitMiddleware, settings=s)
 app.include_router(auth_router)
 _searcher = None
+_graph = None
+_store_lock = threading.Lock()
+
+
+@app.exception_handler(DatabaseUnavailable)
+async def _database_unavailable(_request: Request, exc: DatabaseUnavailable):
+    return JSONResponse({"detail": str(exc) or "Account database unavailable"}, status_code=503)
+
+
+@app.exception_handler(sqlite3.Error)
+async def _store_error(request: Request, exc: sqlite3.Error):
+    log.exception("local store error on %s %s", request.method, request.url.path)
+    return JSONResponse({"detail": "Catalog store unavailable"}, status_code=503)
+
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    log.exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
@@ -79,13 +107,11 @@ class TriggerJobRequest(BaseModel):
 def searcher():
     global _searcher
     if _searcher is None:
-        try:
-            from .search import HybridSearcher
-        except ImportError as exc:
-            raise HTTPException(
-                503, "Search is unavailable until the pipeline extra is installed"
-            ) from exc
-        _searcher = HybridSearcher(s)
+        with _store_lock:
+            if _searcher is None:
+                from .search import HybridSearcher
+
+                _searcher = HybridSearcher(s)
     return _searcher
 
 
@@ -113,17 +139,26 @@ def sources():
     statuses = {}
     path = s.state_dir / "feeds.sqlite"
     if path.exists():
-        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
-            db.row_factory = sqlite3.Row
-            statuses = {r["id"]: dict(r) for r in db.execute("SELECT * FROM feeds")}
+        try:
+            with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
+                db.row_factory = sqlite3.Row
+                statuses = {r["id"]: dict(r) for r in db.execute("SELECT * FROM feeds")}
+        except sqlite3.Error as exc:
+            log.warning("feed status unavailable: %s", exc)
     return {"sources": [item | {"status": statuses.get(item["id"])} for item in catalog(s)]}
 
 
 def graph():
+    global _graph
     if not s.graph_enabled:
         raise HTTPException(503, "Knowledge graph is disabled")
-    from .graph import KnowledgeGraph
-    return KnowledgeGraph(s)
+    if _graph is None:
+        with _store_lock:
+            if _graph is None:
+                from .graph import KnowledgeGraph
+
+                _graph = KnowledgeGraph(s)
+    return _graph
 
 
 @app.get("/v1/graph/stats")
@@ -161,10 +196,11 @@ def graph_entities(q: str = Query(default="", max_length=200),
 
 @app.get("/v1/graph/entities/{entity_id}")
 def graph_neighbors(entity_id: str, limit: int = Query(default=100, ge=1, le=500)):
-    profile = graph().entity_profile(entity_id)
+    kg = graph()
+    profile = kg.entity_profile(entity_id)
     if profile is None:
         raise HTTPException(404, "Entity not found")
-    neighborhood = graph().neighborhood(entity_id, limit)
+    neighborhood = kg.neighborhood(entity_id, limit)
     return neighborhood | {"profile": profile}
 
 
@@ -204,6 +240,7 @@ def healthz():
         "ok": True,
         "auth_required": s.auth_required,
         "database": database_configured(s),
+        "database_error": database_problem() if database_configured(s) else None,
     }
 
 
@@ -303,10 +340,16 @@ def crawl_stats():
     path = s.state_dir / "crawl.sqlite"
     if not path.exists():
         return {"frontier": {}, "downloads": 0}
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    frontier = {r[0]: r[1] for r in db.execute("SELECT status,COUNT(*) FROM frontier GROUP BY status")}
-    downloads = db.execute("SELECT COUNT(*) FROM downloads").fetchone()[0]
-    db.close()
+    try:
+        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
+            frontier = {
+                r[0]: r[1]
+                for r in db.execute("SELECT status,COUNT(*) FROM frontier GROUP BY status")
+            }
+            downloads = db.execute("SELECT COUNT(*) FROM downloads").fetchone()[0]
+    except sqlite3.Error as exc:
+        log.warning("crawl stats unavailable: %s", exc)
+        return {"frontier": {}, "downloads": 0}
     return {"frontier": frontier, "downloads": downloads}
 
 
@@ -427,6 +470,11 @@ async def agent_proxy(path: str, request: Request):
         raise HTTPException(
             503, "local agent unavailable; start with: docker compose --profile ai up -d"
         )
+    except httpx.TimeoutException:
+        raise HTTPException(504, "local agent timed out")
+    except httpx.HTTPError as exc:
+        log.warning("agent proxy error: %s", exc)
+        raise HTTPException(502, "local agent request failed")
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 import sqlite3
 import threading
-from pathlib import Path
+from contextlib import closing
+from typing import TYPE_CHECKING
 
-import numpy as np
-from usearch.index import Index
-
-from .embedding import Embedder
 from .settings import Settings
+
+if TYPE_CHECKING:
+    from usearch.index import Index
+
+    from .embedding import Embedder
 
 log = logging.getLogger(__name__)
 
@@ -22,14 +25,31 @@ class HybridSearcher:
         self.vector_path = settings.state_dir / "vectors.usearch"
         self.meta_path = settings.state_dir / "vector-meta.json"
         self._embedder: Embedder | None = None
-        self.db = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.db = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self._index: Index | None = None
         self._mtime = -1.0
         self._lock = threading.RLock()
+        # FastAPI runs sync routes on a thread pool; one sqlite connection must not be shared
+        # by concurrent cursors.
+        self._db_lock = threading.RLock()
+        self._semantic_disabled: str | None = None
+        missing = [m for m in ("numpy", "usearch") if importlib.util.find_spec(m) is None]
+        if missing:
+            self._semantic_disabled = f"semantic search unavailable: {', '.join(missing)} missing"
+            log.info("%s; serving lexical results only", self._semantic_disabled)
         self._ensure_schema()
+
+    def _rows(self, sql: str, params=()) -> list[sqlite3.Row]:
+        with self._db_lock:
+            return self.db.execute(sql, params).fetchall()
+
+    def _scalar(self, sql: str, params=()):
+        with self._db_lock:
+            row = self.db.execute(sql, params).fetchone()
+        return row[0] if row else None
 
     def _ensure_schema(self) -> None:
         """Initialize an empty read-compatible store when no indexer has run yet."""
@@ -76,12 +96,16 @@ class HybridSearcher:
 
     def _get_embedder(self) -> Embedder:
         if self._embedder is None:
+            from .embedding import Embedder
+
             self._embedder = Embedder(self.s)
         return self._embedder
 
     def _load_index(self) -> Index | None:
         if not self.vector_path.exists() or not self.meta_path.exists():
             return None
+        from usearch.index import Index
+
         mtime = self.vector_path.stat().st_mtime
         if self._index is not None and mtime == self._mtime:
             return self._index
@@ -108,31 +132,50 @@ class HybridSearcher:
         if not terms:
             return []
         fts_query = " OR ".join(f'"{t}"' for t in terms[:32])
-        rows = self.db.execute(
-            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts) LIMIT ?",
-            (fts_query, limit),
-        ).fetchall()
+        try:
+            rows = self._rows(
+                "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? "
+                "ORDER BY bm25(chunks_fts) LIMIT ?",
+                (fts_query, limit),
+            )
+        except sqlite3.OperationalError as exc:
+            log.warning("lexical search failed for %r: %s", query[:80], exc)
+            return []
         return [int(r[0]) for r in rows]
 
+    @property
+    def semantic_available(self) -> bool:
+        return self._semantic_disabled is None
+
     def _semantic(self, query: str, limit: int) -> list[int]:
-        idx = self._load_index()
-        if idx is None or len(idx) == 0:
+        if self._semantic_disabled:
             return []
-        vec = self._get_embedder().embed(["query: " + query])[0]
-        matches = idx.search(vec, min(limit, len(idx)))
-        return [int(k) for k in matches.keys]
+        try:
+            idx = self._load_index()
+            if idx is None or len(idx) == 0:
+                return []
+            vec = self._get_embedder().embed(["query: " + query])[0]
+            matches = idx.search(vec, min(limit, len(idx)))
+            return [int(k) for k in matches.keys]
+        except ImportError as exc:
+            # Slim installs (e.g. Vercel) ship without the pipeline extra.
+            self._semantic_disabled = f"semantic search unavailable: {exc.name or exc}"
+            log.info("%s; serving lexical results only", self._semantic_disabled)
+        except Exception as exc:
+            log.warning("semantic search failed; serving lexical results only: %s", exc)
+        return []
 
     def _hydrate(self, ranked: list[int], scores: dict[int, float]) -> list[dict]:
         if not ranked:
             return []
         placeholders = ",".join("?" * len(ranked))
-        rows = self.db.execute(
+        rows = self._rows(
             f"""SELECT c.id,c.chunk_no,c.text,d.source_sha256,d.source_url,d.source_urls_json,
                       d.title,d.mime,d.fetched_at,d.text_chars
                FROM chunks c JOIN documents d ON d.id=c.document_id
                WHERE c.id IN ({placeholders})""",
             ranked,
-        ).fetchall()
+        )
         by_id = {int(r["id"]): r for r in rows}
         out = []
         for cid in ranked:
@@ -199,23 +242,23 @@ class HybridSearcher:
         return hydrated[:top_k]
 
     def document(self, sha256: str) -> dict | None:
-        row = self.db.execute(
+        rows = self._rows(
             """SELECT id,source_sha256,source_url,source_urls_json,requested_url,title,mime,size,
                       fetched_at,extracted_at,text_chars
                FROM documents WHERE source_sha256=?""",
             (sha256.lower(),),
-        ).fetchone()
-        if not row:
+        )
+        if not rows:
             return None
-        doc = dict(row)
+        doc = dict(rows[0])
         try:
             doc["source_urls"] = json.loads(doc.pop("source_urls_json"))
         except Exception:
             doc["source_urls"] = [doc["source_url"]]
-        chunks = self.db.execute(
+        chunks = self._rows(
             "SELECT id,chunk_no,text FROM chunks WHERE document_id=? ORDER BY chunk_no",
             (doc["id"],),
-        ).fetchall()
+        )
         doc["chunks"] = [dict(c) for c in chunks]
         return doc
 
@@ -237,43 +280,43 @@ class HybridSearcher:
             like = f"%{q}%"
             params.extend([like, like])
         clause = (" WHERE " + " AND ".join(where)) if where else ""
-        total = self.db.execute(f"SELECT COUNT(*) FROM documents{clause}", params).fetchone()[0]
-        rows = self.db.execute(
+        total = self._scalar(f"SELECT COUNT(*) FROM documents{clause}", params) or 0
+        rows = self._rows(
             f"""SELECT source_sha256,source_url,title,mime,size,fetched_at,text_chars
                 FROM documents{clause}
                 ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
                 LIMIT ? OFFSET ?""",
             [*params, limit, offset],
-        ).fetchall()
+        )
         return {"total": total, "limit": limit, "offset": offset, "documents": [dict(r) for r in rows]}
 
     def facets(self) -> dict:
-        mime_rows = self.db.execute(
+        mime_rows = self._rows(
             """SELECT COALESCE(mime,'(unknown)') AS mime, COUNT(*) AS n
                FROM documents GROUP BY 1 ORDER BY n DESC LIMIT 40"""
-        ).fetchall()
+        )
         return {"mime": [{"value": r["mime"], "count": r["n"]} for r in mime_rows]}
 
     def stats(self) -> dict:
-        docs = self.db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
-        chunks = self.db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        chars = self.db.execute("SELECT COALESCE(SUM(text_chars),0) FROM documents").fetchone()[0]
+        docs = self._scalar("SELECT COUNT(*) FROM documents") or 0
+        chunks = self._scalar("SELECT COUNT(*) FROM chunks") or 0
+        chars = self._scalar("SELECT COALESCE(SUM(text_chars),0) FROM documents") or 0
         crawl = {}
         crawl_path = self.s.state_dir / "crawl.sqlite"
         if crawl_path.exists():
             try:
-                cdb = sqlite3.connect(f"file:{crawl_path}?mode=ro", uri=True)
-                crawl = {
-                    r[0]: r[1]
-                    for r in cdb.execute("SELECT status,COUNT(*) FROM frontier GROUP BY status")
-                }
-                cdb.close()
+                with closing(sqlite3.connect(f"file:{crawl_path}?mode=ro", uri=True)) as cdb:
+                    crawl = {
+                        r[0]: r[1]
+                        for r in cdb.execute("SELECT status,COUNT(*) FROM frontier GROUP BY status")
+                    }
             except Exception as exc:
                 log.warning("crawl stats unavailable: %s", exc)
         return {
             "documents": docs,
             "chunks": chunks,
             "text_chars": chars,
+            "semantic_search": self.semantic_available,
             "embedding_backend": self.s.embedding_backend,
             "embedding_model": (
                 self.s.embedding_model
