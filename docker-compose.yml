@@ -46,10 +46,6 @@ services:
     <<: *app
     command: ["python", "-m", "cia_brain.worker_crawler"]
 
-  feeds:
-    <<: *app
-    command: ["python", "-m", "cia_brain.feeds"]
-
   extractor:
     <<: *app
     command: ["python", "-m", "cia_brain.worker_extractor"]

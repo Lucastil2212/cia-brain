@@ -56,87 +56,6 @@ SOURCES = (
         ("text", "pdf"),
         documentation="https://crsreports.congress.gov/",
     ),
-    Source(
-        "usgs",
-        "USGS",
-        "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson",
-        "geojson",
-        ("text", "geospatial"),
-        60,
-        "https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php",
-    ),
-    Source(
-        "nws",
-        "NOAA/NWS",
-        "https://api.weather.gov/alerts/active",
-        "geojson",
-        ("text", "geospatial"),
-        120,
-        "https://www.weather.gov/documentation/services-web-api",
-    ),
-    Source(
-        "swpc",
-        "NOAA/SWPC",
-        "https://services.swpc.noaa.gov/products/geospace/propagated-solar-wind-1-hour.json",
-        "timeseries",
-        ("telemetry",),
-        60,
-        "https://www.swpc.noaa.gov/products/real-time-solar-wind",
-    ),
-    Source(
-        "goes",
-        "NOAA/NESDIS",
-        "https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/latest.jpg",
-        "image",
-        ("image",),
-        600,
-        "https://www.star.nesdis.noaa.gov/GOES/",
-    ),
-    Source(
-        "nasa",
-        "NASA",
-        "https://images-api.nasa.gov/search?media_type=image,video,audio&year_start=2026&page_size=100",
-        "media",
-        ("text", "image", "video", "audio"),
-        3600,
-        "https://images.nasa.gov/docs/images.nasa.gov_api_docs.pdf",
-    ),
-    Source(
-        "nara_catalog",
-        "NARA",
-        "https://catalog.archives.gov/api/v1/?q=declassified&type=description&rows=50&resultTypes=item,fileUnit",
-        "catalog",
-        ("text", "geospatial"),
-        1800,
-        "https://github.com/usnationalarchives/CatalogAPI",
-    ),
-    Source(
-        "state_rss",
-        "Department of State",
-        "https://www.state.gov/rss-feed/press-releases/feed/",
-        "rss",
-        ("text",),
-        900,
-        "https://www.state.gov/rss-feed/",
-    ),
-    Source(
-        "fema_rss",
-        "FEMA",
-        "https://www.fema.gov/about/news-multimedia/rss",
-        "rss",
-        ("text",),
-        900,
-        "https://www.fema.gov/about/news-multimedia",
-    ),
-    Source(
-        "odni_rss",
-        "ODNI",
-        "https://www.dni.gov/index.php?format=feed&type=rss",
-        "rss",
-        ("text",),
-        1800,
-        "https://www.dni.gov/",
-    ),
 )
 
 # Extra attachment / CDN hosts linked from FOIA reading rooms.
@@ -168,7 +87,6 @@ def archive_hosts(ids: str) -> set[str]:
 
 def catalog(settings) -> list[dict]:
     enabled = {s.id for s in selected_sources(settings.archive_sources, True)}
-    enabled |= {s.id for s in selected_sources(settings.live_sources)}
     return [asdict(s) | {"enabled": s.id in enabled} for s in SOURCES]
 
 

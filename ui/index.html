@@ -4,17 +4,17 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CIA Brain — Public Archive Research Catalog</title>
-  <meta name="description" content="Local research catalog for public U.S. government archives, FOIA releases, live open-data feeds, and a source-grounded knowledge graph. Hybrid search over your open data lake." />
+  <meta name="description" content="Searchable archive of public declassified and historical U.S. intelligence documents, centered on the CIA and other agency reading rooms." />
   <meta name="application-name" content="CIA Brain" />
   <meta name="theme-color" content="#1a2e28" />
   <meta name="robots" content="noindex, nofollow" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="CIA Brain — Public Archive Research Catalog" />
-  <meta property="og:description" content="Search declassified collections, live multimodal feeds, and entity correlations in a local open-data lake." />
+  <meta property="og:description" content="Search public declassified collections from U.S. intelligence agencies." />
   <meta property="og:image" content="/assets/logo.svg" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="CIA Brain — Public Archive Research Catalog" />
-  <meta name="twitter:description" content="Local library-style discovery over public government archives and open intelligence feeds." />
+  <meta name="twitter:description" content="A finding aid for public declassified U.S. intelligence documents." />
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/assets/logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -29,7 +29,7 @@
     "alternateName": "CIA Brain Public Archive Research Catalog",
     "applicationCategory": "EducationalApplication",
     "operatingSystem": "Local Docker / browser",
-    "description": "Local research catalog for public U.S. government archives, FOIA releases, live open-data feeds, and a source-grounded knowledge graph.",
+    "description": "Searchable archive of public declassified and historical U.S. intelligence documents.",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
   }
   </script>
@@ -48,7 +48,7 @@
       <nav class="nav" aria-label="Primary">
         <button type="button" data-view="search" class="nav-btn is-active">Catalog</button>
         <button type="button" data-view="graph" class="nav-btn">Knowledge graph</button>
-        <button type="button" data-view="gallery" class="nav-btn">Multimodal</button>
+        <button type="button" data-view="gallery" class="nav-btn">Images</button>
         <button type="button" data-view="sources" class="nav-btn">Collections</button>
         <button type="button" data-view="browse" class="nav-btn">Holdings</button>
         <button type="button" data-view="reason" class="nav-btn">Reading room</button>
@@ -62,9 +62,9 @@
   <main class="frame">
     <section id="view-search" class="view is-active">
       <div class="hero">
-        <p class="eyebrow">Special collections · local open data lake</p>
+        <p class="eyebrow">Declassified collections</p>
         <h1 class="brand-hero">CIA Brain</h1>
-        <p class="lede">A library-style finding aid over public agency archives, FOIA reading rooms, and live multimodal open sources — with hybrid search and provenance on every result.</p>
+        <p class="lede">A finding aid for public declassified and historical documents, centered on the CIA reading room and the other U.S. intelligence collections mirrored here.</p>
         <form id="search-form" class="search-form" autocomplete="off">
           <label class="sr-only" for="q">Catalog query</label>
           <input id="q" name="q" type="search" placeholder="Search titles, programs, places, agencies…" required />
@@ -81,7 +81,7 @@
           <div id="mime-chart" class="chart" role="img" aria-label="MIME distribution chart"></div>
         </figure>
         <figure class="viz-panel">
-          <figcaption>Collection modalities</figcaption>
+          <figcaption>Collection formats</figcaption>
           <div id="modality-chart" class="chart" role="img" aria-label="Modality distribution chart"></div>
         </figure>
       </div>
@@ -154,20 +154,10 @@
 
     <section id="view-gallery" class="view">
       <div class="panel-head">
-        <h2>Multimodal gallery</h2>
-        <p>Browse image, geospatial, telemetry, and media-reference holdings from live feeds and archives.</p>
+        <h2>Archived images</h2>
+        <p>Scans and figures saved with the document collections. Maps, satellite imagery, and other live observations are not part of this archive.</p>
       </div>
       <div class="filters gallery-filters">
-        <label>Modality
-          <select id="gallery-modality">
-            <option value="">All multimodal</option>
-            <option value="image">Images</option>
-            <option value="geospatial">Geospatial</option>
-            <option value="telemetry">Telemetry</option>
-            <option value="video">Video refs</option>
-            <option value="audio">Audio refs</option>
-          </select>
-        </label>
         <button type="button" id="gallery-refresh">Refresh shelf</button>
       </div>
       <div id="gallery-status" class="status" hidden></div>
@@ -177,7 +167,7 @@
     <section id="view-sources" class="view">
       <div class="panel-head">
         <h2>Collections</h2>
-        <p>Curated public archives and polling feeds. Status reflects local ingestion, not upstream availability.</p>
+        <p>Public declassified and historical collections. Each one is a robots-aware crawl of a reading room or document library.</p>
       </div>
       <div id="source-viz" class="viz-row"></div>
       <div id="source-list" class="collection-list"></div>

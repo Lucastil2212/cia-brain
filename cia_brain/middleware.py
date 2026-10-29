@@ -124,7 +124,17 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         client = _client_ip(request, self.s.trust_proxy_headers)
-        if is_auth_endpoint:
+        # <img> loads cannot send the API key, and a gallery page is dozens of GETs.
+        # Keep them off the search/query budget so browsing holdings is not a 429.
+        is_raw = request.method == "GET" and path.startswith("/v1/raw/")
+        if is_raw:
+            if principal:
+                bucket = f"raw:key:{principal.get('key_id') or principal['user_id']}"
+            else:
+                bucket = f"raw:ip:{client}"
+            per_min = self.s.raw_rate_limit_per_minute
+            per_day = self.s.raw_rate_limit_per_day
+        elif is_auth_endpoint:
             bucket = f"auth:{client}"
             per_min = self.s.auth_rate_limit_per_minute
             per_day = self.s.auth_rate_limit_per_minute * 20

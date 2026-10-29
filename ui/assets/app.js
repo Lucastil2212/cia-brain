@@ -201,54 +201,11 @@ function bindDocButtons(root) {
   });
 }
 
-function sparklineSvg(values) {
-  const nums = values.map(Number).filter((n) => Number.isFinite(n));
-  if (nums.length < 2) return "";
-  const w = 220;
-  const h = 48;
-  const min = Math.min(...nums);
-  const max = Math.max(...nums);
-  const span = max - min || 1;
-  const pts = nums
-    .map((v, i) => {
-      const x = (i / (nums.length - 1)) * w;
-      const y = h - ((v - min) / span) * (h - 6) - 3;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-  return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#0d5c4d" stroke-width="2" points="${pts}"/></svg>`;
-}
-
 function multimodalBlock(doc) {
   const parts = [];
   const mime = doc.mime || "";
-  const isImage = mime.startsWith("image/") || (doc.modalities || []).includes("image");
-  if (isImage) {
+  if (mime.startsWith("image/")) {
     parts.push(`<div class="media-frame"><img src="/v1/raw/${escapeHtml(doc.source_sha256)}" alt="${escapeHtml(doc.title || "Archived image")}" loading="lazy" /></div>`);
-  }
-  if (doc.geometry?.type === "Point" && Array.isArray(doc.geometry.coordinates)) {
-    const [lon, lat] = doc.geometry.coordinates;
-    const x = ((Number(lon) + 180) / 360) * 100;
-    const y = ((90 - Number(lat)) / 180) * 100;
-    parts.push(`<div class="geo-dot" style="--x:${x}%;--y:${y}%" title="${lat}, ${lon}" role="img" aria-label="Point at ${lat}, ${lon}"></div>
-      <p class="meta">Point geometry · ${Number(lat).toFixed(4)}, ${Number(lon).toFixed(4)}</p>`);
-  }
-  if (doc.measurements && typeof doc.measurements === "object") {
-    const entries = Object.entries(doc.measurements).slice(0, 12);
-    const numeric = entries.map(([, v]) => Number(v)).filter((n) => Number.isFinite(n));
-    parts.push(`<h4>Telemetry</h4>${sparklineSvg(numeric)}
-      <table class="measure-table"><tbody>${entries
-        .map(([k, v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`)
-        .join("")}</tbody></table>`);
-  }
-  if (doc.media) {
-    const links = [];
-    if (doc.media.assets) links.push(`<a href="${safeHref(doc.media.assets)}" target="_blank" rel="noopener">asset index</a>`);
-    for (const link of doc.media.links || []) {
-      const href = link.href || link;
-      if (href) links.push(`<a href="${safeHref(href)}" target="_blank" rel="noopener">${escapeHtml(link.rel || "media")}</a>`);
-    }
-    parts.push(`<p class="meta">Media · ${escapeHtml(doc.media.type || "reference")} · ${links.join(" · ") || "no links"}</p>`);
   }
   if (doc.graph?.entities?.length) {
     parts.push(`<p class="meta">Graph entities · ${doc.graph.entities
@@ -1100,9 +1057,7 @@ async function loadSources() {
           s.interval ? `polls every ${s.interval}s` : "robots-aware archive crawl"
         }</p>
         <p><a href="${safeHref(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a></p>
-        <p class="meta">${escapeHtml(
-          s.status?.error || (s.status?.last_success ? `Last success: ${s.status.last_success}` : "No feed poll recorded"),
-        )}</p>
+        <p class="meta">${escapeHtml(s.status?.error || "Robots-aware crawl of this collection")}</p>
       </article>`,
       )
       .join("");
@@ -1115,12 +1070,6 @@ function galleryPreview(doc) {
   const mime = doc.mime || "";
   if (mime.startsWith("image/")) {
     return `<img class="gallery-thumb" src="/v1/raw/${escapeHtml(doc.source_sha256)}" alt="" loading="lazy" />`;
-  }
-  if (mime.includes("geo") || /earthquake|weather\.gov|geometry/i.test(doc.source_url || "")) {
-    return `<div class="gallery-placeholder">Geospatial / alert record</div>`;
-  }
-  if (/solar-wind|timeseries|swpc/i.test(doc.source_url || "") || mime.includes("json")) {
-    return `<div class="gallery-placeholder">Structured / telemetry record</div>`;
   }
   return `<div class="gallery-placeholder">${escapeHtml((mime || "document").slice(0, 40))}</div>`;
 }
@@ -1227,25 +1176,10 @@ async function mintKey() {
 
 async function loadGallery() {
   const status = $("#gallery-status");
-  const modality = $("#gallery-modality").value;
-  setStatus(status, "Pulling multimodal holdings…");
+  setStatus(status, "Pulling archived images…");
   try {
-    // Prefer image MIME shelf, then broaden.
-    const mimeQuery = modality === "image" ? "image/" : "";
-    const data = await api(
-      `/v1/documents?limit=48&offset=0${mimeQuery ? `&mime=${encodeURIComponent(mimeQuery)}` : ""}`,
-    );
-    let docs = data.documents || [];
-    if (modality && modality !== "image") {
-      // Heuristic filter on URL/title for feed modalities until index stores modalities.
-      const re = {
-        geospatial: /earthquake|weather\.gov|alert|geojson|usgs|nws/i,
-        telemetry: /solar-wind|swpc|timeseries|propagated/i,
-        video: /video|nasa/i,
-        audio: /audio|nasa/i,
-      }[modality];
-      if (re) docs = docs.filter((d) => re.test(`${d.title} ${d.source_url} ${d.mime}`));
-    }
+    const data = await api("/v1/documents?limit=48&offset=0&mime=image%2F");
+    const docs = data.documents || [];
     $("#gallery-grid").innerHTML =
       docs
         .map(
@@ -1255,7 +1189,7 @@ async function loadGallery() {
           <span class="meta">${escapeHtml(d.mime || "")} · ${(d.fetched_at || "").slice(0, 10)}</span>
         </button>`,
         )
-        .join("") || "<p class='status'>No multimodal holdings matched this shelf yet.</p>";
+        .join("") || "<p class='status'>No archived images on this shelf yet.</p>";
     $$(".gallery-item").forEach((btn) =>
       btn.addEventListener("click", () => openDocument(btn.dataset.sha)),
     );
@@ -1487,7 +1421,6 @@ function wire() {
     }
   });
   $("#gallery-refresh").addEventListener("click", loadGallery);
-  $("#gallery-modality").addEventListener("change", loadGallery);
   $("#auth-form").addEventListener("submit", authLogin);
   $("#auth-register").addEventListener("click", authRegister);
   $("#auth-logout").addEventListener("click", authLogout);

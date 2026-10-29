@@ -50,8 +50,8 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="CIA Brain Public Archive Research Catalog",
     description=(
-        "Local library-style discovery over public U.S. government archives, "
-        "live multimodal feeds, and a source-grounded knowledge graph. "
+        "Local library-style discovery over public declassified and historical "
+        "U.S. intelligence collections, and a source-grounded knowledge graph. "
         "Programmatic access uses X-API-Key or Bearer JWT with per-key rate limits."
     ),
     version="0.5.0",
@@ -136,16 +136,8 @@ def _parse_sha256(value: str) -> str:
 @app.get("/v1/sources")
 def sources():
     from .sources import catalog
-    statuses = {}
-    path = s.state_dir / "feeds.sqlite"
-    if path.exists():
-        try:
-            with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
-                db.row_factory = sqlite3.Row
-                statuses = {r["id"]: dict(r) for r in db.execute("SELECT * FROM feeds")}
-        except sqlite3.Error as exc:
-            log.warning("feed status unavailable: %s", exc)
-    return {"sources": [item | {"status": statuses.get(item["id"])} for item in catalog(s)]}
+
+    return {"sources": catalog(s)}
 
 
 def graph():
@@ -436,6 +428,8 @@ def public_config():
         "api_rate_limit_per_minute": s.api_rate_limit_per_minute,
         "api_rate_limit_per_day": s.api_rate_limit_per_day,
         "anon_rate_limit_per_minute": s.anon_rate_limit_per_minute,
+        "raw_rate_limit_per_minute": s.raw_rate_limit_per_minute,
+        "raw_rate_limit_per_day": s.raw_rate_limit_per_day,
         "job_intervals": {
             "recrawl_stale": s.job_recrawl_interval_seconds,
             "parquet_compact": s.job_parquet_compact_interval_seconds,

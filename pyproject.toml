@@ -1,7 +1,7 @@
 [project]
 name = "cia-brain"
 version = "0.5.0"
-description = "Public government archives, live multimodal feeds, local knowledge graph, hybrid search, Postgres accounts, and rate-limited API access"
+description = "Public declassified-document archive, local knowledge graph, hybrid search, Postgres accounts, and rate-limited API access"
 requires-python = "~=3.12.0"
 dependencies = [
   "email-validator>=2.0,<3",

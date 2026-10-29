@@ -66,7 +66,6 @@ def main() -> None:
     )
     time.sleep(1.5)
     start("crawler", [sys.executable, "-m", "cia_brain.worker_crawler"])
-    start("feeds", [sys.executable, "-m", "cia_brain.feeds"])
     start("extractor", [sys.executable, "-m", "cia_brain.worker_extractor"])
     start("indexer", [sys.executable, "-m", "cia_brain.worker_indexer"])
     start("scheduler", [sys.executable, "-m", "cia_brain.scheduler"])

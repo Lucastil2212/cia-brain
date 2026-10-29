@@ -15,6 +15,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 import aiohttp
 from bs4 import BeautifulSoup
 
+from .backoff import parse_retry_after
 from .bus import connect, publish_json
 from .models import FetchedEvent
 from .settings import Settings
@@ -163,8 +164,10 @@ class Frontier:
         )
         self.db.commit()
 
-    def retry(self, url: str, error: str, tries: int) -> None:
-        delay = min(30 * (2 ** max(0, tries - 1)), 3600)
+    def retry(self, url: str, error: str, tries: int, delay: float | None = None) -> None:
+        if delay is None:
+            delay = min(30 * (2 ** max(0, tries - 1)), 3600)
+        delay = min(86_400, max(0.0, delay))
         self.db.execute(
             "UPDATE frontier SET tries=?,next_attempt=?,last_error=?,updated_at=? WHERE url=?",
             (tries, time.time() + delay, error[:1000], utcnow(), url),
@@ -366,14 +369,26 @@ class RobotsPolicy:
 class HostThrottle:
     def __init__(self):
         self.last: dict[str, float] = {}
+        self.blocked_until: dict[str, float] = {}
         self.lock = asyncio.Lock()
+
+    def block(self, url: str, seconds: float) -> None:
+        """Pause every URL on this host. Used when the origin sends 429 or Retry-After."""
+        host = (urlsplit(url).hostname or "").lower()
+        if not host or seconds <= 0:
+            return
+        until = time.monotonic() + seconds
+        self.blocked_until[host] = max(self.blocked_until.get(host, 0.0), until)
 
     async def wait(self, url: str, delay: float) -> None:
         host = (urlsplit(url).hostname or "").lower()
         async with self.lock:
-            elapsed = time.monotonic() - self.last.get(host, 0.0)
-            if elapsed < delay:
-                await asyncio.sleep(delay - elapsed)
+            now = time.monotonic()
+            elapsed = now - self.last.get(host, 0.0)
+            hold = self.blocked_until.get(host, 0.0) - now
+            pause = max(delay - elapsed, hold, 0.0)
+            if pause > 0:
+                await asyncio.sleep(pause)
             self.last[host] = time.monotonic()
 
 
@@ -507,8 +522,15 @@ class Crawler:
                     self.frontier.mark_done(url)
                     return
                 if resp.status >= 400:
-                    if tries < self.s.max_retries and resp.status in {408, 425, 429, 500, 502, 503, 504}:
-                        self.frontier.retry(url, f"HTTP {resp.status}", tries)
+                    retry_after = parse_retry_after(resp.headers.get("Retry-After"))
+                    retryable = resp.status in {408, 425, 429, 500, 502, 503, 504}
+                    # 429 is a pause, not a dead URL. Skipping it would drop a public
+                    # record from the archive until someone re-seeds the frontier.
+                    if retryable and (resp.status == 429 or tries < self.s.max_retries):
+                        delay = max(min(30 * (2 ** max(0, tries - 1)), 3600), retry_after)
+                        if resp.status == 429 or retry_after:
+                            self.throttle.block(url, delay)
+                        self.frontier.retry(url, f"HTTP {resp.status}", tries, delay)
                     else:
                         self.frontier.mark_skip(url, f"HTTP {resp.status}")
                     return

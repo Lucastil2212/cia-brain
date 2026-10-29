@@ -1,6 +1,6 @@
 # CIA Brain — public intelligence lake, local knowledge graph, and search
 
-CIA Brain is a Docker Compose project that incrementally archives **publicly accessible, robots-allowed government collections** and polls public observation and media APIs, extracts searchable text, stores immutable originals in a content-addressed lake, builds lexical + semantic search projections, and optionally runs a fully local source-grounded research/education agent.
+CIA Brain is a Docker Compose project that incrementally archives **publicly accessible, robots-allowed declassified and historical document collections**, centered on the CIA and expanding to other U.S. intelligence agencies. It extracts searchable text, stores immutable originals in a content-addressed lake, builds lexical + semantic search projections, and optionally runs a fully local source-grounded research/education agent.
 
 It is designed to plug into the Manticore Open Data Lake conventions:
 
@@ -37,7 +37,6 @@ Because of that published 10-second delay, a truly exhaustive first crawl can ta
 |---|---|
 | `nats` | durable event stream between ingestion stages |
 | `crawler` | sitemap + recursive, robots-aware downloader |
-| `feeds` | polls live geo/telemetry/image/media/RSS/catalog APIs |
 | `extractor` | HTML/PDF/Office/text extraction; optional OCR |
 | `indexer` | chunking, FTS5, embeddings, USearch, Parquet compaction |
 | `api` | hybrid search, discovery API, and web UI on port 8080 |
@@ -50,7 +49,7 @@ Because of that published 10-second delay, a truly exhaustive first crawl can ta
 ```bash
 cp .env.example .env
 mkdir -p data
-docker compose up -d --build nats indexer extractor crawler feeds api scheduler
+docker compose up -d --build nats indexer extractor crawler api scheduler
 ```
 
 Open the **Search & Discovery UI** at [http://localhost:8080/](http://localhost:8080/).
@@ -62,7 +61,7 @@ See [`DEPLOY.md`](DEPLOY.md) and [`render.yaml`](render.yaml). Render runs manag
 Local accounts (optional):
 
 ```bash
-docker compose up -d --build postgres nats api crawler feeds extractor indexer scheduler
+docker compose up -d --build postgres nats api crawler extractor indexer scheduler
 docker compose --profile migrate run --rm migrate
 ```
 
@@ -89,7 +88,7 @@ The repository includes a root `app.py` entrypoint for Vercel's zero-configurati
 
 On Vercel, `DATA_DIR` defaults to `/tmp/cia-brain`, which is writable but **ephemeral**. This lets the FastAPI application and web UI boot cleanly for a serverless deployment, including an empty search store before any index exists.
 
-The full ingestion system still requires long-running services and durable storage: NATS, crawler, feeds, extractor, indexer, scheduler, and optionally Ollama/agent. Keep Docker Compose for that backend (or move those services to a persistent container host) and treat the Vercel deployment as the public FastAPI/UI surface until the durable backend is externalized.
+The full ingestion system still requires long-running services and durable storage: NATS, crawler, extractor, indexer, scheduler, and optionally Ollama/agent. Keep Docker Compose for that backend (or move those services to a persistent container host) and treat the Vercel deployment as the public FastAPI/UI surface until the durable backend is externalized.
 
 No `vercel.json` is required for the root FastAPI entrypoint.
 
@@ -207,7 +206,6 @@ data/
     crawl.sqlite
     search.sqlite
     graph.sqlite       # entities, mentions, evidence-bearing edges
-    feeds.sqlite       # polling state and record revisions
     vectors.usearch
     vector-meta.json
   models/       # FastEmbed model cache
@@ -281,10 +279,11 @@ docker compose run --rm --entrypoint cia-brain api sql \
 The Compose file pins Ollama to `0.34.1` (current stable tag verified when this project was assembled) rather than `latest`.
 
 
-## Government collections, live feeds, and knowledge graph
+## Document collections and knowledge graph
 
-Additional archives are enabled by default through
-`ARCHIVE_SOURCES=fbi,nsa,nara,state,odni,dia,crs`:
+The archive is declassified and historical documents, not live observations. CIA.gov,
+including the reading room, is the seed. Additional collections are enabled by default
+through `ARCHIVE_SOURCES=fbi,nsa,nara,state,odni,dia,crs`:
 [FBI Vault](https://vault.fbi.gov/), [NSA declassification](https://www.nsa.gov/Helpful-Links/NSA-FOIA/Declassification-Transparency-Initiatives/),
 [National Archives declassification](https://www.archives.gov/declassification),
 [State Department historical documents](https://history.state.gov/historicaldocuments),
@@ -293,46 +292,10 @@ Additional archives are enabled by default through
 [CRS reports](https://crsreports.congress.gov/).
 These include FOIA releases and historical publications; public availability alone does not
 establish that every item was previously classified. Collection links and linked attachments
-are crawled subject to robots rules, throttling, and configured depth. The live
-`nara_catalog` feed polls the public [NARA Catalog API](https://github.com/usnationalarchives/CatalogAPI)
-for declassified description hits; it does not retrieve records that exist only in a reading room.
+are crawled subject to robots rules, throttling, and configured depth.
 New collection hosts are discovered from their seeds rather than loading entire agency sitemaps.
 Redirect destinations are checked before requests. A robots denial remains a denial.
-Set `ARCHIVE_SOURCES=` to keep only the original configured hosts and seeds.
-
-The `feeds` Compose service polls these fixed public endpoints independently of the archive
-frontier. No API key is required. Set `CRAWLER_CONTACT` to a contact address for the User-Agent,
-as requested by NWS. `LIVE_SOURCES=` disables polling; comma-separated IDs select feeds.
-
-| ID | Source and documentation | Interval | Stored content |
-|---|---|---|---|
-| `usgs` | [USGS earthquakes](https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php) | 60s | Past-hour global events, text, timestamps, point geometries |
-| `nws` | [NWS active alerts](https://www.weather.gov/documentation/services-web-api) | 120s | Alert text, properties, timestamps, available polygons |
-| `swpc` | [NOAA solar wind](https://www.swpc.noaa.gov/products/real-time-solar-wind) | 60s | One-hour propagated solar-wind measurements |
-| `goes` | [NOAA GOES imagery](https://www.star.nesdis.noaa.gov/GOES/) | 600s | Actual GOES-19 CONUS GeoColor image bytes |
-| `nasa` | [NASA media API](https://images.nasa.gov/docs/images.nasa.gov_api_docs.pdf) | 3600s | First 100 current-year search results: descriptions and image/audio/video asset references |
-| `nara_catalog` | [NARA Catalog API](https://github.com/usnationalarchives/CatalogAPI) | 1800s | Declassified catalog descriptions (naId, title, text) |
-| `state_rss` | [State Department press RSS](https://www.state.gov/rss-feed/) | 900s | Press-release titles and summaries |
-| `fema_rss` | [FEMA news RSS](https://www.fema.gov/about/news-multimedia) | 900s | Emergency/management press items |
-| `odni_rss` | [ODNI site RSS](https://www.dni.gov/) | 1800s | ODNI news/feed items when published |
-
-“Live” means periodic polling, with upstream publication latency. NASA is a periodically
-refreshed media catalog, not a real-time sensor feed or exhaustive archive. NASA audio/video
-binaries are referenced, not downloaded or transcribed. GOES imagery is archived locally;
-optional Tesseract OCR extracts visible text, not visual scene interpretation. No local
-speech recognition or vision model is included. The USGS past-hour feed cannot backfill
-outages longer than its window. Missing alerts are retained as historical observations;
-“active” graph records mean the latest stored revision, not an assertion that an alert is
-still in force.
-
-Snapshots and individual structured records are content-addressed. Each normalized feed
-record links to its original snapshot hash, upstream record ID, source ID, publication time,
-geometry/measurements/media references, and fetch time. `source_url` for structured records
-is the feed endpoint with a record-ID fragment; the upstream properties retain original
-links where provided. Changed records enter the existing NATS extraction/search pipeline;
-unchanged records are deduplicated. Conditional requests, bounded response sizes, persistent
-backoff, and per-source errors are exposed in `GET /v1/sources` and the **Sources** tab.
-Only one feeds worker should run against a given data directory.
+Set `ARCHIVE_SOURCES=` to keep only the CIA hosts and seeds.
 
 The graph is a local SQLite WAL database at `data/state/graph.sqlite`, built during extraction
 without external graph databases or hosted AI. Entity extraction is controlled by `GRAPH_NER`:
@@ -361,12 +324,10 @@ excluded from matches. Documents with Point geometries also support Haversine pr
 via `GET /v1/graph/correlations/{sha}?mode=spatial` (default radius `GRAPH_SPATIAL_RADIUS_KM`).
 Graph analysis is bounded to the first two million text characters,
 20 unique non-date entities per sentence, and 2,000 characters per evidence excerpt;
-truncation and analyzed character counts are recorded. Revision replay is idempotent and
-older feed revisions are excluded from current graph queries. Historical bytes remain stored.
-Telemetry time-series correlation is still not inferred automatically.
+truncation and analyzed character counts are recorded. Historical bytes remain stored.
 
 Open **Knowledge graph** in the UI to search entities, inspect supporting passages, and find
-related documents (entity overlap or nearby geo). API access:
+related documents. API access:
 
 ```bash
 curl 'http://localhost:8080/v1/sources'
@@ -383,7 +344,7 @@ To apply these changes to an existing installation and populate the graph from e
 normalized documents:
 
 ```bash
-docker compose up -d --build nats crawler feeds extractor indexer api scheduler
+docker compose up -d --build nats crawler extractor indexer api scheduler
 docker compose run --rm --entrypoint cia-brain api run-job frontier_seed
 docker compose run --rm --entrypoint cia-brain api run-job graph_rebuild
 ```

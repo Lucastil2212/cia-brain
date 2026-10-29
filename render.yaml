@@ -45,8 +45,6 @@ services:
         value: auto
       - key: ARCHIVE_SOURCES
         value: fbi,nsa,nara,state,odni,dia,crs
-      - key: LIVE_SOURCES
-        value: usgs,nws,swpc,goes,nasa,nara_catalog,state_rss,fema_rss,odni_rss
       - key: API_RATE_LIMIT_PER_MINUTE
         value: "60"
       - key: API_RATE_LIMIT_PER_DAY

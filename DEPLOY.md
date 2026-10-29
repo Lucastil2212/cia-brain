@@ -3,7 +3,7 @@
 ## Architecture
 
 - **Render Postgres** — user accounts, API keys, rate-limit buckets
-- **One web service** (`cia-brain`) — all-in-one process: NATS + crawler + feeds + extractor + indexer + scheduler + FastAPI/UI
+- **One web service** (`cia-brain`) — all-in-one process: NATS + crawler + extractor + indexer + scheduler + FastAPI/UI
 - **Persistent disk** (`/data`) — immutable lake, search indexes, graph SQLite, NATS JetStream store
 
 Separate Render workers are **not** used because disks cannot be shared between services.
@@ -17,7 +17,7 @@ Separate Render workers are **not** used because disks cannot be shared between 
 1. **Connect the GitHub repo** `Lucastil2212/cia-brain` (or your fork) to Render.
 2. **New → Blueprint** → select the repo → confirm `render.yaml` → Apply.
 3. When prompted for sync:false env vars, set:
-   - `CRAWLER_CONTACT` — a real contact email/URL for the User-Agent (required by NWS etiquette).
+   - `CRAWLER_CONTACT` — a real contact email or URL for the crawler User-Agent.
 4. Confirm plans (Pro):
    - Postgres `basic-1gb` (or upgrade to Pro Postgres if you prefer).
    - Web service `standard` (or higher) — needs RAM for FastEmbed + spaCy + ingest.
@@ -52,7 +52,7 @@ curl -s -X POST "$HOST/v1/search" \
 
 ## Notes
 
-- First crawl is slow (CIA robots delay ≈ 10s). Live feeds populate sooner.
+- First crawl is slow (CIA robots delay ≈ 10s).
 - Deploys with a disk briefly interrupt the service (no zero-downtime).
 - Ollama / local LLM agent is **not** part of the Render blueprint (no GPU profile). Search + graph work without it.
 - Rotate `JWT_SECRET` only if you can accept invalidating existing sessions (Render generated it on first apply).

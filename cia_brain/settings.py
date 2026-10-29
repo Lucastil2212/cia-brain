@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     api_rate_limit_per_day: int = 5000
     anon_rate_limit_per_minute: int = 30
     anon_rate_limit_per_day: int = 1000
+    # Content-addressed file reads (gallery thumbnails, raw downloads) do not share
+    # the search budget. A shelf of images would otherwise 429 halfway down the page.
+    raw_rate_limit_per_minute: int = 300
+    raw_rate_limit_per_day: int = 20_000
     auth_rate_limit_per_minute: int = 10
 
     crawler_user_agent: str = "ManticoreEducationalArchiver/1.0"
@@ -57,7 +61,6 @@ class Settings(BaseSettings):
     allowed_hosts: str = "www.cia.gov,cia.gov"
     seed_urls: str = "https://www.cia.gov/,https://www.cia.gov/readingroom/"
     archive_sources: str = "fbi,nsa,nara,state,odni,dia,crs"
-    live_sources: str = "usgs,nws,swpc,goes,nasa,nara_catalog,state_rss,fema_rss,odni_rss"
     feed_max_bytes: int = 20_000_000
     graph_enabled: bool = True
     graph_spatial_radius_km: float = 250.0
