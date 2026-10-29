@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .crawler import Frontier, canonicalize_url, is_allowed_host
+from .sources import archive_url_allowed
 from .indexer import SearchStore
 from .settings import Settings
 
@@ -54,7 +55,7 @@ def job_frontier_seed(settings: Settings) -> JobResult:
     added = 0
     for url in settings.seed_url_list:
         c = canonicalize_url(url)
-        if not c or not is_allowed_host(c, settings.allowed_host_set):
+        if not c or not is_allowed_host(c, settings.allowed_host_set) or not archive_url_allowed(c, settings):
             continue
         before = frontier.db.execute("SELECT 1 FROM frontier WHERE url=?", (c,)).fetchone()
         frontier.add(c, 0, discovered_from="scheduler:seed")

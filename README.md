@@ -303,8 +303,10 @@ at `/d/{sha256}` with its citation, captures, and the text difference when the
 bytes change. Search and holdings default to the CIA collection.
 
 Every successful download and every not-modified check appends a capture
-(`url`, SHA-256, status, fetch time) in `crawl.sqlite`. The downloads table
-still points at the latest bytes. Search hits and the document record include
+(`url`, SHA-256, status, fetch time) in `crawl.sqlite`. Downloads stored
+before that log existed are copied in once, as a single capture of the latest
+hash. Earlier hashes the downloads table already replaced are not recoverable.
+The downloads table still points at the latest bytes. Search hits and the document record include
 a citation: agency, collection, title, source URL, SHA-256, and fetch time.
 The Collections tab shows the frontier status of each seed, including a refusal
 such as HTTP 403, instead of treating every listed agency as already archived.

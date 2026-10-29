@@ -34,6 +34,32 @@ def ensure_provenance_columns(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def backfill_observations(db: sqlite3.Connection) -> int:
+    """Copy the latest stored download into the capture log when it predates that log.
+
+    Older hashes that the downloads table already replaced cannot be recovered.
+    """
+    ensure_observations(db)
+    try:
+        db.execute("SELECT 1 FROM downloads LIMIT 1")
+    except sqlite3.Error:
+        return 0
+    cursor = db.execute(
+        """
+        INSERT INTO observations(url, final_url, sha256, status_code, fetched_at, mime)
+        SELECT d.url, d.final_url, d.sha256, COALESCE(d.status_code, 200), d.fetched_at, d.mime
+        FROM downloads d
+        WHERE d.url IS NOT NULL AND d.sha256 IS NOT NULL AND d.fetched_at IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM observations o
+            WHERE o.url = d.url AND o.sha256 = d.sha256 AND o.fetched_at = d.fetched_at
+          )
+        """
+    )
+    db.commit()
+    return int(cursor.rowcount)
+
+
 def append_observation(
     db: sqlite3.Connection,
     *,

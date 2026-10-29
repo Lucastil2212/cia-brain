@@ -1046,7 +1046,7 @@ async function loadSources() {
           s.interval ? `polls every ${s.interval}s` : "robots-aware archive crawl"
         }</p>
         <p><a href="${safeHref(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a></p>
-        <p class="meta">${escapeHtml(collectionStatus(s))}</p>
+        <p class="meta">${fmtNum(s.document_count || 0)} documents · ${escapeHtml(collectionStatus(s))}</p>
       </article>`,
       )
       .join("");

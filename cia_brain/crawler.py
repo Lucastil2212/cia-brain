@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 
 from .backoff import parse_retry_after
 from .bus import connect, publish_json
-from .history import append_observation, ensure_observations
+from .history import append_observation, backfill_observations, ensure_observations
 from .models import FetchedEvent
 from .settings import Settings
 from .sources import archive_url_allowed, source_for_url
@@ -137,6 +137,7 @@ class Frontier:
             """
         )
         ensure_observations(self.db)
+        backfill_observations(self.db)
         self.db.commit()
 
     def add(self, url: str, depth: int, discovered_from: str | None = None) -> None:

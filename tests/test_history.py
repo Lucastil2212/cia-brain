@@ -1,5 +1,5 @@
 from cia_brain.crawler import Frontier
-from cia_brain.history import observations_for, text_diff, version_chain
+from cia_brain.history import backfill_observations, observations_for, text_diff, version_chain
 from cia_brain.models import FetchedEvent
 from cia_brain.search import HybridSearcher
 from cia_brain.settings import Settings
@@ -64,6 +64,34 @@ def test_document_citation(tmp_path):
         "chunk_no": None,
     }
     searcher.db.close()
+
+
+def test_backfill_copies_downloads_that_predate_the_capture_log(tmp_path):
+    settings = Settings(data_dir=tmp_path, min_free_disk_gb=0, _env_file=None)
+    settings.ensure_dirs()
+    frontier = Frontier(settings.state_dir / "crawl.sqlite")
+    frontier.db.execute(
+        """INSERT INTO downloads(url, final_url, sha256, path, mime, size, status_code, fetched_at, depth)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (
+            "https://www.cia.gov/readingroom/document/old",
+            "https://www.cia.gov/readingroom/document/old",
+            "d" * 64,
+            "/tmp/old",
+            "application/pdf",
+            20,
+            200,
+            "2025-01-01T00:00:00+00:00",
+            0,
+        ),
+    )
+    frontier.db.commit()
+    assert backfill_observations(frontier.db) == 1
+    assert backfill_observations(frontier.db) == 0
+    row = frontier.db.execute("SELECT sha256, status_code FROM observations").fetchone()
+    assert row["sha256"] == "d" * 64
+    assert row["status_code"] == 200
+    frontier.db.close()
 
 
 def test_retry_returns_a_done_url_to_the_queue(tmp_path):

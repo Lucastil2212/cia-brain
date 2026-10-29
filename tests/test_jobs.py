@@ -31,10 +31,19 @@ def test_health_snapshot_and_status(tmp_path: Path):
 def test_frontier_seed_job(tmp_path: Path):
     s = Settings(
         data_dir=tmp_path,
-        seed_urls="https://www.cia.gov/",
+        seed_urls="https://www.cia.gov/,https://www.cia.gov/readingroom/",
         allowed_hosts="www.cia.gov,cia.gov",
+        archive_sources="",
+        _env_file=None,
     )
     s.ensure_dirs()
     result = run_job("frontier_seed", s)
     assert result.ok
-    assert result.detail.get("seeded", 0) >= 1
+    assert result.detail.get("seeded") == 1
+    from cia_brain.crawler import Frontier
+
+    frontier = Frontier(s.state_dir / "crawl.sqlite")
+    urls = {row[0] for row in frontier.db.execute("SELECT url FROM frontier")}
+    assert "https://www.cia.gov/readingroom/" in urls
+    assert "https://www.cia.gov/" not in urls
+    frontier.db.close()

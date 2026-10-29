@@ -141,6 +141,9 @@ def sources():
     from .sources import catalog
 
     items = catalog(s)
+    counts = _collection_counts()
+    for item in items:
+        item["document_count"] = counts.get(item["id"], 0)
     path = s.state_dir / "crawl.sqlite"
     if path.exists():
         try:
@@ -155,6 +158,34 @@ def sources():
         except sqlite3.Error as exc:
             log.warning("collection status unavailable: %s", exc)
     return {"sources": items}
+
+
+def _collection_counts() -> dict[str, int]:
+    from .sources import SOURCES, collection_url_prefixes
+
+    path = s.state_dir / "search.sqlite"
+    if not path.exists():
+        return {}
+    counts: dict[str, int] = {}
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        cols = {row[1] for row in db.execute("PRAGMA table_info(documents)")}
+        if "source_id" not in cols:
+            db.close()
+            return {}
+        for source in SOURCES:
+            prefixes = collection_url_prefixes(source.id)
+            likes = " OR ".join("source_url LIKE ?" for _ in prefixes)
+            row = db.execute(
+                f"SELECT COUNT(*) FROM documents WHERE source_id = ? OR {likes}",
+                [source.id, *[f"{prefix}%" for prefix in prefixes]],
+            ).fetchone()
+            counts[source.id] = int(row[0] if row else 0)
+        db.close()
+    except sqlite3.Error as exc:
+        log.warning("collection counts unavailable: %s", exc)
+        return {}
+    return counts
 
 
 def graph():
@@ -408,14 +439,26 @@ def _document_page(doc: dict) -> str:
         body = html.escape(doc.get("text") or "No extracted text is stored for this file.")
     versions = []
     for row in doc.get("versions") or []:
-        mark = "bytes changed" if row.get("changed") else "same bytes" if row.get("sha256") else "no hash"
+        sha = row.get("sha256") or ""
+        mark = "bytes changed" if row.get("changed") else "same bytes" if sha else "no hash"
+        short = html.escape(sha[:12])
+        if len(sha) == 64:
+            label = f'<a href="/d/{html.escape(sha)}">{short}</a>'
+            if sha == digest:
+                label += " · this page"
+        else:
+            label = short or "no hash"
         versions.append(
             "<li>"
             f"{html.escape((row.get('fetched_at') or '')[:19])} · HTTP {html.escape(str(row.get('status_code') or ''))}"
-            f" · {html.escape(mark)} · {html.escape((row.get('sha256') or '')[:12])}"
+            f" · {html.escape(mark)} · {label}"
             "</li>"
         )
-    version_html = f"<ul>{''.join(versions)}</ul>" if versions else "<p>No captures recorded yet. History starts with the next crawl.</p>"
+    version_html = (
+        f"<ul>{''.join(versions)}</ul>"
+        if versions
+        else "<p>No captures recorded yet.</p>"
+    )
     diff = doc.get("text_diff") or ""
     diff_html = f"<h2>Change from previous capture</h2><pre class=\"chunk\">{html.escape(diff)}</pre>" if diff else ""
     mime = doc.get("mime") or ""
