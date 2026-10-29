@@ -255,7 +255,60 @@ class HybridSearcher:
                     item, mime=mime, since=since, until=until, sha256=sha256, source_id=source_id
                 )
             ]
+        # A chosen hash still opens that capture. Ordinary search shows the current one.
+        if not sha256:
+            hydrated = self._prefer_latest(hydrated)
         return hydrated[:top_k]
+
+    def _prefer_latest(self, items: list[dict]) -> list[dict]:
+        urls = list(dict.fromkeys(item.get("source_url") for item in items if item.get("source_url")))
+        if not urls:
+            return items
+        placeholders = ",".join("?" * len(urls))
+        rows = self._rows(
+            f"""SELECT source_url, source_sha256 FROM (
+                  SELECT source_url, source_sha256,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY source_url
+                           ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
+                         ) AS rn
+                  FROM documents
+                  WHERE source_url IN ({placeholders})
+                ) WHERE rn = 1""",
+            urls,
+        )
+        latest = {row["source_url"]: row["source_sha256"] for row in rows}
+        return [
+            item
+            for item in items
+            if latest.get(item.get("source_url"), item.get("source_sha256")) == item.get("source_sha256")
+        ]
+
+    def latest_sha(self, source_url: str) -> str | None:
+        if not source_url:
+            return None
+        rows = self._rows(
+            """SELECT source_sha256 FROM documents
+               WHERE source_url=?
+               ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
+               LIMIT 1""",
+            (source_url,),
+        )
+        return rows[0]["source_sha256"] if rows else None
+
+    def _latest_id_sql(self, clause: str) -> str:
+        return f"""
+            SELECT id FROM (
+              SELECT id,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY source_url
+                       ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
+                     ) AS rn
+              FROM documents
+              {clause}
+            )
+            WHERE rn = 1
+        """
 
     def document(self, sha256: str) -> dict | None:
         rows = self._rows(
@@ -313,10 +366,12 @@ class HybridSearcher:
             like = f"%{q}%"
             params.extend([like, like])
         clause = (" WHERE " + " AND ".join(where)) if where else ""
-        total = self._scalar(f"SELECT COUNT(*) FROM documents{clause}", params) or 0
+        latest = self._latest_id_sql(clause)
+        total = self._scalar(f"SELECT COUNT(*) FROM ({latest})", params) or 0
         rows = self._rows(
             f"""SELECT source_sha256,source_url,title,mime,size,fetched_at,text_chars,source_id,agency
-                FROM documents{clause}
+                FROM documents
+                WHERE id IN ({latest})
                 ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
                 LIMIT ? OFFSET ?""",
             [*params, limit, offset],
@@ -324,13 +379,16 @@ class HybridSearcher:
         return {"total": total, "limit": limit, "offset": offset, "documents": [dict(r) for r in rows]}
 
     def facets(self) -> dict:
+        latest = self._latest_id_sql("")
         mime_rows = self._rows(
-            """SELECT COALESCE(mime,'(unknown)') AS mime, COUNT(*) AS n
-               FROM documents GROUP BY 1 ORDER BY n DESC LIMIT 40"""
+            f"""SELECT COALESCE(mime,'(unknown)') AS mime, COUNT(*) AS n
+                FROM documents WHERE id IN ({latest})
+                GROUP BY 1 ORDER BY n DESC LIMIT 40"""
         )
         collections = self._rows(
-            """SELECT COALESCE(NULLIF(source_id, ''), '(unassigned)') AS source_id, COUNT(*) AS n
-               FROM documents GROUP BY 1 ORDER BY n DESC LIMIT 40"""
+            f"""SELECT COALESCE(NULLIF(source_id, ''), '(unassigned)') AS source_id, COUNT(*) AS n
+                FROM documents WHERE id IN ({latest})
+                GROUP BY 1 ORDER BY n DESC LIMIT 40"""
         )
         return {
             "mime": [{"value": r["mime"], "count": r["n"]} for r in mime_rows],

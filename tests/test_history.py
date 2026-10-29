@@ -145,6 +145,42 @@ def test_holdings_can_be_limited_to_one_collection(tmp_path):
     searcher.db.close()
 
 
+def _insert_version(searcher, sha: str, url: str, fetched: str, text: str) -> None:
+    searcher.db.execute(
+        """INSERT INTO documents(
+             source_sha256, source_url, title, mime, fetched_at, text_chars, source_id, agency
+           ) VALUES (?,?,?,?,?,?,?,?)""",
+        (sha, url, "Memo", "text/html", fetched, len(text), "cia", "CIA"),
+    )
+    doc_id = searcher.db.execute(
+        "SELECT id FROM documents WHERE source_sha256=?", (sha,)
+    ).fetchone()[0]
+    searcher.db.execute(
+        "INSERT INTO chunks(document_id, chunk_no, text) VALUES (?,?,?)",
+        (doc_id, 0, text),
+    )
+    searcher.db.commit()
+
+
+def test_catalog_lists_the_current_capture_only(tmp_path):
+    settings = Settings(data_dir=tmp_path, _env_file=None)
+    settings.ensure_dirs()
+    searcher = HybridSearcher(settings)
+    url = "https://www.cia.gov/readingroom/document/memo"
+    old, new = "a" * 64, "b" * 64
+    _insert_version(searcher, old, url, "2026-01-01T00:00:00+00:00", "mkultra memo alpha")
+    _insert_version(searcher, new, url, "2026-06-01T00:00:00+00:00", "mkultra memo beta")
+    listed = searcher.list_documents(source_id="cia")
+    assert listed["total"] == 1
+    assert listed["documents"][0]["source_sha256"] == new
+    hits = searcher.search("mkultra", 10)
+    assert {hit["source_sha256"] for hit in hits} == {new}
+    older = searcher.search("mkultra", 10, sha256=old)
+    assert older and older[0]["source_sha256"] == old
+    assert searcher.latest_sha(url) == new
+    searcher.db.close()
+
+
 def test_document_page_shows_a_byte_change():
     from cia_brain.api import _document_page
 

@@ -177,7 +177,15 @@ def _collection_counts() -> dict[str, int]:
             prefixes = collection_url_prefixes(source.id)
             likes = " OR ".join("source_url LIKE ?" for _ in prefixes)
             row = db.execute(
-                f"SELECT COUNT(*) FROM documents WHERE source_id = ? OR {likes}",
+                f"""SELECT COUNT(*) FROM (
+                      SELECT id,
+                             ROW_NUMBER() OVER (
+                               PARTITION BY source_url
+                               ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
+                             ) AS rn
+                      FROM documents
+                      WHERE source_id = ? OR {likes}
+                    ) WHERE rn = 1""",
                 [source.id, *[f"{prefix}%" for prefix in prefixes]],
             ).fetchone()
             counts[source.id] = int(row[0] if row else 0)
@@ -386,6 +394,9 @@ def _assemble_document(digest: str) -> dict:
             doc["source_id"] = origin.id
             doc["agency"] = doc.get("agency") or origin.agency
     doc["citation"] = citation_for(doc)
+    latest = searcher().latest_sha(doc.get("source_url") or "")
+    if latest and latest != digest:
+        doc["latest_sha256"] = latest
     urls = [doc.get("source_url"), doc.get("requested_url"), *(doc.get("source_urls") or [])]
     doc["observations"] = observations_for(s, digest, urls)
     doc["versions"] = version_chain(doc["observations"])
@@ -432,6 +443,13 @@ def _document_page(doc: dict) -> str:
     source_url = cite.get("source_url") or doc.get("source_url") or ""
     digest = doc.get("source_sha256") or ""
     fetched = html.escape((cite.get("fetched_at") or "")[:19])
+    latest = doc.get("latest_sha256") or ""
+    newer_html = ""
+    if latest and latest != digest:
+        newer_html = (
+            '<p class="meta">A newer capture of this URL is stored. '
+            f'<a href="/d/{html.escape(latest)}">Open the current version</a>.</p>'
+        )
     chunks = doc.get("chunks") or []
     if chunks:
         body = "\n\n".join(html.escape(chunk.get("text") or "") for chunk in chunks)
@@ -482,6 +500,7 @@ def _document_page(doc: dict) -> str:
     <p class="meta"><a href="{html.escape(source_url, quote=True)}">Government source</a>
       · <a href="/v1/raw/{html.escape(digest)}">Download original</a>
       · <code>{html.escape(digest)}</code></p>
+    {newer_html}
     {original}
     <h2>Captures</h2>
     {version_html}
