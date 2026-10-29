@@ -8,8 +8,11 @@ import threading
 from contextlib import closing
 from typing import TYPE_CHECKING
 
-from .history import citation_for, ensure_provenance_columns
+from .history import citation_for, ensure_provenance_columns, version_url
 from .settings import Settings
+
+# One chain per requested URL. The final URL can change when a host redirects.
+VERSION_URL_SQL = "COALESCE(NULLIF(requested_url, ''), source_url)"
 
 if TYPE_CHECKING:
     from usearch.index import Index
@@ -184,8 +187,8 @@ class HybridSearcher:
             return []
         placeholders = ",".join("?" * len(ranked))
         rows = self._rows(
-            f"""SELECT c.id,c.chunk_no,c.text,d.source_sha256,d.source_url,d.source_urls_json,
-                      d.title,d.mime,d.fetched_at,d.text_chars,d.source_id,d.agency
+            f"""SELECT c.id,c.chunk_no,c.text,d.source_sha256,d.source_url,d.requested_url,
+                      d.source_urls_json,d.title,d.mime,d.fetched_at,d.text_chars,d.source_id,d.agency
                FROM chunks c JOIN documents d ON d.id=c.document_id
                WHERE c.id IN ({placeholders})""",
             ranked,
@@ -276,35 +279,45 @@ class HybridSearcher:
         return hydrated[:top_k]
 
     def _prefer_latest(self, items: list[dict]) -> list[dict]:
-        urls = list(dict.fromkeys(item.get("source_url") for item in items if item.get("source_url")))
+        urls = list(
+            dict.fromkeys(
+                version_url(item.get("requested_url"), item.get("source_url"))
+                for item in items
+                if version_url(item.get("requested_url"), item.get("source_url"))
+            )
+        )
         if not urls:
             return items
         placeholders = ",".join("?" * len(urls))
         rows = self._rows(
-            f"""SELECT source_url, source_sha256 FROM (
-                  SELECT source_url, source_sha256,
+            f"""SELECT version_url, source_sha256 FROM (
+                  SELECT {VERSION_URL_SQL} AS version_url, source_sha256,
                          ROW_NUMBER() OVER (
-                           PARTITION BY source_url
+                           PARTITION BY {VERSION_URL_SQL}
                            ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
                          ) AS rn
                   FROM documents
-                  WHERE source_url IN ({placeholders})
+                  WHERE {VERSION_URL_SQL} IN ({placeholders})
                 ) WHERE rn = 1""",
             urls,
         )
-        latest = {row["source_url"]: row["source_sha256"] for row in rows}
+        latest = {row["version_url"]: row["source_sha256"] for row in rows}
         return [
             item
             for item in items
-            if latest.get(item.get("source_url"), item.get("source_sha256")) == item.get("source_sha256")
+            if latest.get(
+                version_url(item.get("requested_url"), item.get("source_url")),
+                item.get("source_sha256"),
+            )
+            == item.get("source_sha256")
         ]
 
     def latest_sha(self, source_url: str) -> str | None:
         if not source_url:
             return None
         rows = self._rows(
-            """SELECT source_sha256 FROM documents
-               WHERE source_url=?
+            f"""SELECT source_sha256 FROM documents
+               WHERE {VERSION_URL_SQL}=?
                ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
                LIMIT 1""",
             (source_url,),
@@ -316,7 +329,7 @@ class HybridSearcher:
             SELECT id FROM (
               SELECT id,
                      ROW_NUMBER() OVER (
-                       PARTITION BY source_url
+                       PARTITION BY {VERSION_URL_SQL}
                        ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
                      ) AS rn
               FROM documents
@@ -363,7 +376,7 @@ class HybridSearcher:
         q: str | None = None,
         source_id: str | None = None,
     ) -> dict:
-        from .sources import collection_url_prefixes
+        from .sources import collection_filter_sql
 
         where: list[str] = []
         params: list = []
@@ -371,11 +384,9 @@ class HybridSearcher:
             where.append("mime LIKE ?")
             params.append(f"{mime}%")
         if source_id:
-            prefixes = collection_url_prefixes(source_id)
-            likes = " OR ".join("source_url LIKE ?" for _ in prefixes)
-            where.append(f"(source_id = ? OR {likes})" if likes else "source_id = ?")
-            params.append(source_id)
-            params.extend(f"{prefix}%" for prefix in prefixes)
+            match, match_params = collection_filter_sql(source_id)
+            where.append(match)
+            params.extend(match_params)
         if q:
             where.append("(title LIKE ? OR source_url LIKE ?)")
             like = f"%{q}%"

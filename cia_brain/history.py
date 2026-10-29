@@ -116,6 +116,12 @@ def observations_for(settings, sha256: str, urls: list[str] | None = None, limit
     return [dict(row) for row in rows]
 
 
+def version_url(requested: str | None, source: str | None) -> str:
+    """Stable identity for a capture chain. The requested URL wins over a redirect target."""
+    requested = (requested or "").strip()
+    return requested or (source or "").strip()
+
+
 def version_chain(observations: list[dict]) -> list[dict]:
     """Order captures per URL and mark when the stored hash changes."""
     grouped: dict[str, list[dict]] = {}

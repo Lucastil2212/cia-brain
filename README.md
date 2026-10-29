@@ -301,7 +301,9 @@ Other collections are seeded from their collection page, and sitemap addresses a
 enqueued only when they fall inside that collection. A document has a stable page
 at `/d/{sha256}` with its citation, captures, and the text difference when the
 bytes change. Search and holdings default to the CIA collection, and they list the current
-capture of each URL. Older hashes stay addressable at `/d/{sha256}`.
+capture of each URL. The requested URL, not a later redirect, identifies that
+chain. Older hashes stay addressable at `/d/{sha256}`. A document already
+tagged for one agency is not also counted under another.
 
 Every successful download and every not-modified check appends a capture
 (`url`, SHA-256, status, fetch time) in `crawl.sqlite`. Downloads stored

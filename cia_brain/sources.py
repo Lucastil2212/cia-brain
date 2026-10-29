@@ -131,6 +131,20 @@ def source_for_url(url: str, settings) -> Source | None:
     return None
 
 
+def collection_filter_sql(source_id: str) -> tuple[str, list[str]]:
+    """Match a collection by its id, and by URL only when the id was never stored.
+
+    A document already tagged for one agency must not also match another agency
+    because its URL happens to share a prefix.
+    """
+    prefixes = collection_url_prefixes(source_id)
+    if not prefixes:
+        return "source_id = ?", [source_id]
+    likes = " OR ".join("source_url LIKE ?" for _ in prefixes)
+    sql = f"(source_id = ? OR ((source_id IS NULL OR source_id = '') AND ({likes})))"
+    return sql, [source_id, *[f"{prefix}%" for prefix in prefixes]]
+
+
 def collection_url_prefixes(source_id: str) -> list[str]:
     """URL prefixes that belong to a collection, including rows indexed before source_id existed."""
     source = next((item for item in SOURCES if item.id == source_id), None)

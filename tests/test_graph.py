@@ -121,6 +121,31 @@ def test_spatial_correlations(tmp_path):
     assert hits[0]["distance_km"] < 100
 
 
+def test_redirect_target_does_not_split_the_graph_version(tmp_path):
+    g = graph(tmp_path)
+    requested = "https://www.cia.gov/readingroom/document/1"
+    g.ingest(
+        document(
+            "a",
+            "CIA and NASA.",
+            source_url="https://www.cia.gov/readingroom/document/old",
+            requested_url=requested,
+            fetched_at="2026-01-01T00:00:00+00:00",
+        )
+    )
+    g.ingest(
+        document(
+            "b",
+            "FBI reviewed the file.",
+            source_url="https://www.cia.gov/readingroom/document/new",
+            requested_url=requested,
+            fetched_at="2026-06-01T00:00:00+00:00",
+        )
+    )
+    assert not g.entities("Central Intelligence Agency")
+    assert g.entities("Federal Bureau")
+
+
 def test_older_crawl_hash_leaves_the_graph(tmp_path):
     g = graph(tmp_path)
     url = "https://www.cia.gov/readingroom/document/1"

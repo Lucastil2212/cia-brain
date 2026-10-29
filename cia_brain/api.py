@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from .auth_routes import require_admin, router as auth_router
 from .db import DatabaseUnavailable, database_configured, database_problem, disable_database
-from .history import citation_for, observations_for, text_diff, version_chain
+from .history import citation_for, observations_for, text_diff, version_chain, version_url
 from .log import configure_logging
 from .middleware import AuthRateLimitMiddleware
 from .paths import require_sha256
@@ -161,7 +161,7 @@ def sources():
 
 
 def _collection_counts() -> dict[str, int]:
-    from .sources import SOURCES, collection_url_prefixes
+    from .sources import SOURCES, collection_filter_sql
 
     path = s.state_dir / "search.sqlite"
     if not path.exists():
@@ -174,19 +174,18 @@ def _collection_counts() -> dict[str, int]:
             db.close()
             return {}
         for source in SOURCES:
-            prefixes = collection_url_prefixes(source.id)
-            likes = " OR ".join("source_url LIKE ?" for _ in prefixes)
+            match, match_params = collection_filter_sql(source.id)
             row = db.execute(
                 f"""SELECT COUNT(*) FROM (
                       SELECT id,
                              ROW_NUMBER() OVER (
-                               PARTITION BY source_url
+                               PARTITION BY COALESCE(NULLIF(requested_url, ''), source_url)
                                ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
                              ) AS rn
                       FROM documents
-                      WHERE source_id = ? OR {likes}
+                      WHERE {match}
                     ) WHERE rn = 1""",
-                [source.id, *[f"{prefix}%" for prefix in prefixes]],
+                match_params,
             ).fetchone()
             counts[source.id] = int(row[0] if row else 0)
         db.close()
@@ -394,7 +393,7 @@ def _assemble_document(digest: str) -> dict:
             doc["source_id"] = origin.id
             doc["agency"] = doc.get("agency") or origin.agency
     doc["citation"] = citation_for(doc)
-    latest = searcher().latest_sha(doc.get("source_url") or "")
+    latest = searcher().latest_sha(version_url(doc.get("requested_url"), doc.get("source_url")))
     if latest and latest != digest:
         doc["latest_sha256"] = latest
     urls = [doc.get("source_url"), doc.get("requested_url"), *(doc.get("source_urls") or [])]

@@ -201,6 +201,47 @@ def test_normalized_documents_lists_stored_hashes(tmp_path):
     assert [item[0] for item in found] == [digest]
 
 
+def test_redirect_keeps_one_current_capture(tmp_path):
+    settings = Settings(data_dir=tmp_path, _env_file=None)
+    settings.ensure_dirs()
+    searcher = HybridSearcher(settings)
+    requested = "https://www.cia.gov/readingroom/document/memo"
+    searcher.db.execute(
+        """INSERT INTO documents(
+             source_sha256, source_url, requested_url, title, mime, fetched_at, text_chars, source_id, agency
+           ) VALUES (?,?,?,?,?,?,?,?,?)""",
+        ("a" * 64, "https://www.cia.gov/readingroom/document/old-target", requested, "Old", "text/html", "2026-01-01T00:00:00+00:00", 4, "cia", "CIA"),
+    )
+    searcher.db.execute(
+        """INSERT INTO documents(
+             source_sha256, source_url, requested_url, title, mime, fetched_at, text_chars, source_id, agency
+           ) VALUES (?,?,?,?,?,?,?,?,?)""",
+        ("b" * 64, "https://www.cia.gov/readingroom/document/new-target", requested, "New", "text/html", "2026-06-01T00:00:00+00:00", 4, "cia", "CIA"),
+    )
+    searcher.db.commit()
+    listed = searcher.list_documents()
+    assert listed["total"] == 1
+    assert listed["documents"][0]["source_sha256"] == "b" * 64
+    assert searcher.latest_sha(requested) == "b" * 64
+    searcher.db.close()
+
+
+def test_tagged_document_is_not_counted_in_another_collection(tmp_path):
+    settings = Settings(data_dir=tmp_path, _env_file=None)
+    settings.ensure_dirs()
+    searcher = HybridSearcher(settings)
+    searcher.db.execute(
+        """INSERT INTO documents(
+             source_sha256, source_url, title, mime, fetched_at, text_chars, source_id, agency
+           ) VALUES (?,?,?,?,?,?,?,?)""",
+        ("c" * 64, "https://www.cia.gov/readingroom/document/shared", "File", "text/html", "2026-01-01T00:00:00+00:00", 4, "fbi", "FBI"),
+    )
+    searcher.db.commit()
+    assert searcher.list_documents(source_id="cia")["total"] == 0
+    assert searcher.list_documents(source_id="fbi")["total"] == 1
+    searcher.db.close()
+
+
 def test_document_page_shows_a_byte_change():
     from cia_brain.api import _document_page
 
