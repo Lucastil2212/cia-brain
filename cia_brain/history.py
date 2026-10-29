@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import sqlite3
 
 OBSERVATIONS = """
@@ -87,6 +88,45 @@ def observations_for(settings, sha256: str, urls: list[str] | None = None, limit
     finally:
         db.close()
     return [dict(row) for row in rows]
+
+
+def version_chain(observations: list[dict]) -> list[dict]:
+    """Order captures per URL and mark when the stored hash changes."""
+    grouped: dict[str, list[dict]] = {}
+    for row in observations:
+        grouped.setdefault(row.get("url") or "", []).append(row)
+    versions: list[dict] = []
+    for url, rows in grouped.items():
+        ordered = sorted(rows, key=lambda item: (item.get("fetched_at") or "", item.get("id") or 0))
+        previous = None
+        for row in ordered:
+            sha = row.get("sha256") or ""
+            changed = bool(previous) and bool(sha) and sha != previous
+            versions.append(
+                {
+                    **row,
+                    "url": url,
+                    "changed": changed,
+                    "previous_sha256": previous if changed else None,
+                }
+            )
+            if sha:
+                previous = sha
+    versions.sort(key=lambda item: item.get("fetched_at") or "", reverse=True)
+    return versions
+
+
+def text_diff(previous: str, current: str, max_lines: int = 160) -> str:
+    """Unified diff of two extracted texts, capped so a large PDF cannot flood the page."""
+    before = previous.splitlines()[:4000]
+    after = current.splitlines()[:4000]
+    lines: list[str] = []
+    for line in difflib.unified_diff(before, after, fromfile="previous", tofile="current", lineterm=""):
+        lines.append(line)
+        if len(lines) >= max_lines:
+            lines.append("… diff truncated")
+            break
+    return "\n".join(lines)
 
 
 def citation_for(doc: dict) -> dict:

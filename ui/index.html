@@ -71,6 +71,7 @@
           <button type="submit">Search catalog</button>
         </form>
         <div class="filters">
+          <label>Collection <select id="collection-filter"><option value="cia" selected>CIA</option><option value="">All collections</option></select></label>
           <label>Format <select id="mime-filter"><option value="">Any format</option></select></label>
           <label>Results <select id="top-k"><option>8</option><option selected>12</option><option>24</option><option>40</option></select></label>
         </div>
@@ -81,7 +82,7 @@
           <div id="mime-chart" class="chart" role="img" aria-label="MIME distribution chart"></div>
         </figure>
         <figure class="viz-panel">
-          <figcaption>Collection formats</figcaption>
+          <figcaption>Holdings by collection</figcaption>
           <div id="modality-chart" class="chart" role="img" aria-label="Modality distribution chart"></div>
         </figure>
       </div>
@@ -208,6 +209,7 @@
         <p>Paginated inventory of normalized documents in the lake.</p>
       </div>
       <form id="browse-form" class="row">
+        <label>Collection <select id="browse-collection"><option value="cia" selected>CIA</option><option value="">All collections</option></select></label>
         <input id="browse-q" type="search" placeholder="Filter title or URL" />
         <button type="submit">Browse</button>
       </form>

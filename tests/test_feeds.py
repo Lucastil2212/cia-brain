@@ -13,6 +13,9 @@ def test_source_scope():
     assert "vault.fbi.gov" in settings.allowed_host_set
     assert "crsreports.congress.gov" in settings.allowed_host_set
     assert "www.dni.gov" in settings.allowed_host_set
+    assert archive_url_allowed("https://www.cia.gov/readingroom/document/1", settings)
+    assert not archive_url_allowed("https://www.cia.gov/", settings)
+    assert not archive_url_allowed("https://www.cia.gov/about", settings)
     assert archive_url_allowed("https://history.state.gov/historicaldocuments/test", settings)
     assert not archive_url_allowed("https://history.state.gov/other", settings)
     assert archive_url_allowed("https://www.dia.mil/FOIA/FOIA-Electronic-Reading-Room/doc.pdf", settings)

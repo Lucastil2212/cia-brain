@@ -171,7 +171,8 @@ class Frontier:
             delay = min(30 * (2 ** max(0, tries - 1)), 3600)
         delay = min(86_400, max(0.0, delay))
         self.db.execute(
-            "UPDATE frontier SET tries=?,next_attempt=?,last_error=?,updated_at=? WHERE url=?",
+            """UPDATE frontier SET status='queued', tries=?,next_attempt=?,last_error=?,updated_at=?
+               WHERE url=?""",
             (tries, time.time() + delay, error[:1000], utcnow(), url),
         )
         self.db.commit()
@@ -459,10 +460,16 @@ class Crawler:
         return self.s.crawler_user_agent + suffix
 
     async def seed_sitemaps(self, session: aiohttp.ClientSession, robots: RobotsPolicy) -> None:
-        for host in {x.strip() for x in self.s.allowed_hosts.split(",") if x.strip()}:
+        from .sources import archive_hosts
+
+        hosts = {x.strip() for x in self.s.allowed_hosts.split(",") if x.strip()}
+        hosts |= archive_hosts(self.s.archive_sources)
+        for host in sorted(hosts):
             await robots.load(host)
         for seed in self.s.seed_url_list:
-            self.frontier.add(canonicalize_url(seed), 0, "seed")
+            canonical = canonicalize_url(seed)
+            if canonical and archive_url_allowed(canonical, self.s):
+                self.frontier.add(canonical, 0, "seed")
         for sitemap in sorted(robots.sitemaps):
             if not is_allowed_host(sitemap, self.s.allowed_host_set):
                 continue
@@ -494,7 +501,7 @@ class Crawler:
                 for loc in root.findall(f".//{ns}loc"):
                     if loc.text:
                         u = canonicalize_url(loc.text.strip())
-                        if u and is_allowed_host(u, self.s.allowed_host_set):
+                        if u and archive_url_allowed(u, self.s) and is_allowed_host(u, self.s.allowed_host_set):
                             self.frontier.add(u, 0, url)
         except Exception as exc:
             log.warning("sitemap failed %s: %s", url, exc)
@@ -593,13 +600,15 @@ class Crawler:
                 manifest = event.to_dict() | {"headers": {k: v for k, v in resp.headers.items()}}
                 write_manifest(self.s, digest, manifest)
                 self.frontier.save_download(event, dict(resp.headers))
-                self.frontier.mark_done(url)
                 payload = event.to_dict()
                 origin = source_for_url(final_url or url, self.s)
                 if origin:
                     payload["source_id"] = origin.id
                     payload["agency"] = origin.agency
+                # Stay queued until search accepts the event. mark_done before
+                # publish left the bytes on disk with no second chance.
                 await publish_json(self.js, "cia.fetched", payload)
+                self.frontier.mark_done(url)
                 log.info("fetched %s bytes %s", event.size, url, extra={"url": url, "sha256": digest})
 
                 if html_buf is not None and depth < self.s.max_depth:

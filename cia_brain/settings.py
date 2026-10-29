@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     crawler_user_agent: str = "ManticoreEducationalArchiver/1.0"
     crawler_contact: str = ""
     allowed_hosts: str = "www.cia.gov,cia.gov"
-    seed_urls: str = "https://www.cia.gov/,https://www.cia.gov/readingroom/"
+    seed_urls: str = "https://www.cia.gov/readingroom/"
     archive_sources: str = "fbi,nsa,nara,state,odni,dia,crs"
     feed_max_bytes: int = 20_000_000
     graph_enabled: bool = True

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import html
 import json
 import logging
 import os
@@ -12,13 +13,13 @@ from pathlib import Path
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .auth_routes import require_admin, router as auth_router
 from .db import DatabaseUnavailable, database_configured, database_problem, disable_database
-from .history import citation_for, observations_for
+from .history import citation_for, observations_for, text_diff, version_chain
 from .log import configure_logging
 from .middleware import AuthRateLimitMiddleware
 from .paths import require_sha256
@@ -99,6 +100,7 @@ class SearchRequest(BaseModel):
     since: str | None = Field(default=None, max_length=64)
     until: str | None = Field(default=None, max_length=64)
     sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    source_id: str | None = Field(default=None, max_length=64)
 
 
 class TriggerJobRequest(BaseModel):
@@ -270,6 +272,7 @@ def search(req: SearchRequest):
         since=req.since,
         until=req.until,
         sha256=req.sha256.lower() if req.sha256 else None,
+        source_id=req.source_id or None,
     )
     return {"query": req.query, "count": len(results), "results": results}
 
@@ -282,9 +285,12 @@ def search_get(
     since: str | None = None,
     until: str | None = None,
     sha256: str | None = None,
+    source_id: str | None = None,
 ):
     digest = _parse_sha256(sha256) if sha256 else None
-    results = searcher().search(q, top_k, mime=mime, since=since, until=until, sha256=digest)
+    results = searcher().search(
+        q, top_k, mime=mime, since=since, until=until, sha256=digest, source_id=source_id or None
+    )
     return {"query": q, "count": len(results), "results": results}
 
 
@@ -294,13 +300,27 @@ def list_documents(
     offset: int = Query(default=0, ge=0),
     mime: str | None = None,
     q: str | None = None,
+    source_id: str | None = None,
 ):
-    return searcher().list_documents(limit=limit, offset=offset, mime=mime, q=q)
+    return searcher().list_documents(
+        limit=limit, offset=offset, mime=mime, q=q, source_id=source_id or None
+    )
 
 
-@app.get("/v1/documents/{sha256}")
-def get_document(sha256: str):
-    digest = _parse_sha256(sha256)
+def _record_text(digest: str) -> str:
+    path = s.normalized_dir / digest[:2] / f"{digest}.json.gz"
+    if not path.is_file():
+        return ""
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as stream:
+            record = json.load(stream)
+    except (OSError, json.JSONDecodeError, gzip.BadGzipFile):
+        return ""
+    text = record.get("text") or ""
+    return text if isinstance(text, str) else ""
+
+
+def _assemble_document(digest: str) -> dict:
     doc = searcher().document(digest)
     if not doc:
         raise HTTPException(404, "document not found")
@@ -337,6 +357,24 @@ def get_document(sha256: str):
     doc["citation"] = citation_for(doc)
     urls = [doc.get("source_url"), doc.get("requested_url"), *(doc.get("source_urls") or [])]
     doc["observations"] = observations_for(s, digest, urls)
+    doc["versions"] = version_chain(doc["observations"])
+    current = doc.get("requested_url") or doc.get("source_url")
+    previous = next(
+        (
+            row.get("previous_sha256")
+            for row in doc["versions"]
+            if row.get("sha256") == digest and row.get("url") == current and row.get("previous_sha256")
+        ),
+        None,
+    )
+    if previous:
+        current_text = doc.get("text") or "\n".join(
+            chunk.get("text") or "" for chunk in doc.get("chunks") or []
+        )
+        previous_text = _record_text(previous)
+        if previous_text and current_text and previous_text != current_text:
+            doc["previous_sha256"] = previous
+            doc["text_diff"] = text_diff(previous_text[:80_000], current_text[:80_000])
     if s.graph_enabled:
         try:
             gdoc = graph().document(digest)
@@ -348,6 +386,73 @@ def get_document(sha256: str):
         except Exception:
             pass
     return doc
+
+
+@app.get("/v1/documents/{sha256}")
+def get_document(sha256: str):
+    return _assemble_document(_parse_sha256(sha256))
+
+
+def _document_page(doc: dict) -> str:
+    cite = doc.get("citation") or {}
+    title = html.escape(cite.get("title") or doc.get("title") or "Document")
+    agency = html.escape(cite.get("agency") or "Unknown agency")
+    collection = html.escape(cite.get("collection") or doc.get("source_id") or "")
+    source_url = cite.get("source_url") or doc.get("source_url") or ""
+    digest = doc.get("source_sha256") or ""
+    fetched = html.escape((cite.get("fetched_at") or "")[:19])
+    chunks = doc.get("chunks") or []
+    if chunks:
+        body = "\n\n".join(html.escape(chunk.get("text") or "") for chunk in chunks)
+    else:
+        body = html.escape(doc.get("text") or "No extracted text is stored for this file.")
+    versions = []
+    for row in doc.get("versions") or []:
+        mark = "bytes changed" if row.get("changed") else "same bytes" if row.get("sha256") else "no hash"
+        versions.append(
+            "<li>"
+            f"{html.escape((row.get('fetched_at') or '')[:19])} · HTTP {html.escape(str(row.get('status_code') or ''))}"
+            f" · {html.escape(mark)} · {html.escape((row.get('sha256') or '')[:12])}"
+            "</li>"
+        )
+    version_html = f"<ul>{''.join(versions)}</ul>" if versions else "<p>No captures recorded yet. History starts with the next crawl.</p>"
+    diff = doc.get("text_diff") or ""
+    diff_html = f"<h2>Change from previous capture</h2><pre class=\"chunk\">{html.escape(diff)}</pre>" if diff else ""
+    mime = doc.get("mime") or ""
+    original = ""
+    if mime == "application/pdf":
+        original = f'<iframe class="media-frame" title="Original PDF" src="/v1/raw/{html.escape(digest)}?inline=1"></iframe>'
+    elif mime.startswith("image/"):
+        original = f'<img src="/v1/raw/{html.escape(digest)}" alt="{title}" />'
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{title} — CIA Brain</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <main class="frame">
+    <p><a href="/">Catalog</a></p>
+    <h1>{title}</h1>
+    <p class="meta">{agency} · {collection} · fetched {fetched}</p>
+    <p class="meta"><a href="{html.escape(source_url, quote=True)}">Government source</a>
+      · <a href="/v1/raw/{html.escape(digest)}">Download original</a>
+      · <code>{html.escape(digest)}</code></p>
+    {original}
+    <h2>Captures</h2>
+    {version_html}
+    {diff_html}
+    <h2>Extracted text</h2>
+    <pre class="chunk">{body}</pre>
+  </main>
+</body>
+</html>"""
+
+
+@app.get("/d/{sha256}", response_class=HTMLResponse)
+def document_page(sha256: str):
+    return HTMLResponse(_document_page(_assemble_document(_parse_sha256(sha256))))
 
 
 @app.get("/v1/crawl/stats")
@@ -408,7 +513,7 @@ def pipeline_run_once(job: str, _admin=Depends(require_admin)):
 
 
 @app.get("/v1/raw/{sha256}")
-def raw(sha256: str):
+def raw(sha256: str, inline: int = Query(default=0, ge=0, le=1)):
     digest = _parse_sha256(sha256)
     matches = list((s.raw_dir / digest[:2] / digest[2:4]).glob(f"{digest}.*"))
     if not matches:
@@ -426,6 +531,9 @@ def raw(sha256: str):
         ".tiff": "image/tiff",
     }
     headers = {"X-Content-Type-Options": "nosniff"}
+    if inline and ext == ".pdf":
+        headers["Content-Disposition"] = "inline"
+        return FileResponse(path, media_type="application/pdf", headers=headers)
     if ext in inline_images:
         return FileResponse(path, media_type=inline_images[ext], headers=headers)
     headers["Content-Disposition"] = f'attachment; filename="{path.name}"'

@@ -131,18 +131,30 @@ def source_for_url(url: str, settings) -> Source | None:
     return None
 
 
+def collection_url_prefixes(source_id: str) -> list[str]:
+    """URL prefixes that belong to a collection, including rows indexed before source_id existed."""
+    source = next((item for item in SOURCES if item.id == source_id), None)
+    if source is None:
+        return []
+    if source.id == "cia":
+        return ["https://www.cia.gov/readingroom", "https://cia.gov/readingroom"]
+    return [source.url.split("?")[0].rstrip("/")]
+
+
 def archive_url_allowed(url: str, settings) -> bool:
     """Scope catalog archives to collections; permit linked government attachments."""
     from posixpath import normpath
 
     parts = urlsplit(url)
-    host = parts.hostname
-    if host in {x.strip().lower() for x in settings.allowed_hosts.split(",")}:
-        return True
-    selected = {x.strip() for x in settings.archive_sources.split(",") if x.strip()}
+    host = (parts.hostname or "").lower()
     path = normpath(parts.path or "/")
     if ".." in path.split("/"):
         return False
+    allowed = {x.strip().lower() for x in settings.allowed_hosts.split(",") if x.strip()}
+    if host in allowed:
+        # CIA.gov is the seed host. Only the reading room is in the archive.
+        return path == "/readingroom" or path.startswith("/readingroom/")
+    selected = {x.strip() for x in settings.archive_sources.split(",") if x.strip()}
     for source in selected_sources(settings.archive_sources, True):
         root = urlsplit(source.url)
         if host == root.hostname:

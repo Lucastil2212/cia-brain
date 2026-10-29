@@ -296,6 +296,11 @@ are crawled subject to robots rules, throttling, and configured depth.
 New collection hosts are discovered from their seeds rather than loading entire agency sitemaps.
 Redirect destinations are checked before requests. A robots denial remains a denial.
 Set `ARCHIVE_SOURCES=` to keep only the CIA hosts and seeds.
+The CIA crawl is the reading room (`/readingroom/`), not the rest of cia.gov.
+Other collections are seeded from their collection page, and sitemap addresses are
+enqueued only when they fall inside that collection. A document has a stable page
+at `/d/{sha256}` with its citation, captures, and the text difference when the
+bytes change. Search and holdings default to the CIA collection.
 
 Every successful download and every not-modified check appends a capture
 (`url`, SHA-256, status, fetch time) in `crawl.sqlite`. The downloads table

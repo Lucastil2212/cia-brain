@@ -209,8 +209,11 @@ class HybridSearcher:
         since: str | None,
         until: str | None,
         sha256: str | None,
+        source_id: str | None = None,
     ) -> bool:
         if mime and not (item.get("mime") or "").startswith(mime):
+            return False
+        if source_id and (item.get("source_id") or "") != source_id:
             return False
         if sha256 and item.get("source_sha256") != sha256.lower():
             return False
@@ -230,9 +233,10 @@ class HybridSearcher:
         since: str | None = None,
         until: str | None = None,
         sha256: str | None = None,
+        source_id: str | None = None,
     ) -> list[dict]:
         top_k = top_k or self.s.default_top_k
-        filtered = any([mime, since, until, sha256])
+        filtered = any([mime, since, until, sha256, source_id])
         candidate_k = max(50, top_k * (8 if filtered else 5))
         lexical = self._lexical(query, candidate_k)
         semantic = self._semantic(query, candidate_k)
@@ -247,7 +251,9 @@ class HybridSearcher:
             hydrated = [
                 item
                 for item in hydrated
-                if self._passes_filters(item, mime=mime, since=since, until=until, sha256=sha256)
+                if self._passes_filters(
+                    item, mime=mime, since=since, until=until, sha256=sha256, source_id=source_id
+                )
             ]
         return hydrated[:top_k]
 
@@ -287,12 +293,21 @@ class HybridSearcher:
         offset: int = 0,
         mime: str | None = None,
         q: str | None = None,
+        source_id: str | None = None,
     ) -> dict:
+        from .sources import collection_url_prefixes
+
         where: list[str] = []
         params: list = []
         if mime:
             where.append("mime LIKE ?")
             params.append(f"{mime}%")
+        if source_id:
+            prefixes = collection_url_prefixes(source_id)
+            likes = " OR ".join("source_url LIKE ?" for _ in prefixes)
+            where.append(f"(source_id = ? OR {likes})" if likes else "source_id = ?")
+            params.append(source_id)
+            params.extend(f"{prefix}%" for prefix in prefixes)
         if q:
             where.append("(title LIKE ? OR source_url LIKE ?)")
             like = f"%{q}%"
@@ -313,7 +328,14 @@ class HybridSearcher:
             """SELECT COALESCE(mime,'(unknown)') AS mime, COUNT(*) AS n
                FROM documents GROUP BY 1 ORDER BY n DESC LIMIT 40"""
         )
-        return {"mime": [{"value": r["mime"], "count": r["n"]} for r in mime_rows]}
+        collections = self._rows(
+            """SELECT COALESCE(NULLIF(source_id, ''), '(unassigned)') AS source_id, COUNT(*) AS n
+               FROM documents GROUP BY 1 ORDER BY n DESC LIMIT 40"""
+        )
+        return {
+            "mime": [{"value": r["mime"], "count": r["n"]} for r in mime_rows],
+            "collections": [{"value": r["source_id"], "count": r["n"]} for r in collections],
+        }
 
     def stats(self) -> dict:
         docs = self._scalar("SELECT COUNT(*) FROM documents") or 0

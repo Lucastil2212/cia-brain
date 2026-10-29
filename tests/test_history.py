@@ -1,5 +1,5 @@
 from cia_brain.crawler import Frontier
-from cia_brain.history import observations_for
+from cia_brain.history import observations_for, text_diff, version_chain
 from cia_brain.models import FetchedEvent
 from cia_brain.search import HybridSearcher
 from cia_brain.settings import Settings
@@ -64,3 +64,88 @@ def test_document_citation(tmp_path):
         "chunk_no": None,
     }
     searcher.db.close()
+
+
+def test_retry_returns_a_done_url_to_the_queue(tmp_path):
+    settings = Settings(data_dir=tmp_path, min_free_disk_gb=0, _env_file=None)
+    settings.ensure_dirs()
+    frontier = Frontier(settings.state_dir / "crawl.sqlite")
+    url = "https://www.cia.gov/readingroom/document/1"
+    frontier.add(url, 0, "seed")
+    frontier.mark_done(url)
+    frontier.retry(url, "publish failed", 1, delay=0)
+    row = frontier.db.execute("SELECT status FROM frontier WHERE url=?", (url,)).fetchone()
+    assert row["status"] == "queued"
+    assert frontier.next()["url"] == url
+    frontier.db.close()
+
+
+def test_version_chain_marks_a_changed_hash():
+    rows = version_chain(
+        [
+            {"url": "https://www.cia.gov/readingroom/a", "sha256": "a" * 64, "fetched_at": "2026-01-01", "status_code": 200},
+            {"url": "https://www.cia.gov/readingroom/a", "sha256": "a" * 64, "fetched_at": "2026-02-01", "status_code": 304},
+            {"url": "https://www.cia.gov/readingroom/a", "sha256": "b" * 64, "fetched_at": "2026-03-01", "status_code": 200},
+        ]
+    )
+    by_time = sorted(rows, key=lambda item: item["fetched_at"])
+    assert by_time[1]["changed"] is False
+    assert by_time[2]["changed"] is True
+    assert by_time[2]["previous_sha256"] == "a" * 64
+    diff = text_diff("alpha\nkeep\n", "beta\nkeep\n")
+    assert "-alpha" in diff and "+beta" in diff
+
+
+def test_holdings_can_be_limited_to_one_collection(tmp_path):
+    settings = Settings(data_dir=tmp_path, _env_file=None)
+    settings.ensure_dirs()
+    searcher = HybridSearcher(settings)
+    searcher.db.execute(
+        """INSERT INTO documents(source_sha256, source_url, title, mime, fetched_at, text_chars, source_id, agency)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        ("a" * 64, "https://www.cia.gov/readingroom/a", "CIA memo", "text/html", "2026-01-01", 10, "cia", "CIA"),
+    )
+    searcher.db.execute(
+        """INSERT INTO documents(source_sha256, source_url, title, mime, fetched_at, text_chars, source_id, agency)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        ("b" * 64, "https://vault.fbi.gov/b", "FBI file", "text/html", "2026-01-02", 10, "fbi", "FBI"),
+    )
+    searcher.db.commit()
+    cia = searcher.list_documents(source_id="cia")
+    assert cia["total"] == 1
+    assert cia["documents"][0]["agency"] == "CIA"
+    searcher.db.close()
+
+
+def test_document_page_shows_a_byte_change():
+    from cia_brain.api import _document_page
+
+    page = _document_page(
+        {
+            "source_sha256": "b" * 64,
+            "mime": "text/html",
+            "text": "beta",
+            "citation": {
+                "agency": "CIA",
+                "collection": "cia",
+                "title": "Memo",
+                "source_url": "https://www.cia.gov/readingroom/document/1",
+                "source_sha256": "b" * 64,
+                "fetched_at": "2026-03-01T00:00:00+00:00",
+            },
+            "versions": [
+                {
+                    "fetched_at": "2026-03-01T00:00:00+00:00",
+                    "status_code": 200,
+                    "sha256": "b" * 64,
+                    "changed": True,
+                }
+            ],
+            "text_diff": "--- previous\n+++ current\n-alpha\n+beta\n",
+            "chunks": [],
+        }
+    )
+    assert "bytes changed" in page
+    assert "Change from previous capture" in page
+    assert "CIA" in page
+    assert f"/d/" not in page or "Memo" in page

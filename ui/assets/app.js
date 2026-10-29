@@ -160,18 +160,26 @@ async function loadCatalogViz() {
       $("#mime-chart"),
       (facets.mime || []).map((m) => ({ label: m.value, value: m.count })),
     );
-    const modalityCounts = {};
-    for (const s of state.sources) {
-      for (const m of s.modalities || []) {
-        modalityCounts[m] = (modalityCounts[m] || 0) + (s.enabled ? 1 : 0);
-      }
-    }
     renderBarChart(
       $("#modality-chart"),
-      Object.entries(modalityCounts).map(([label, value]) => ({ label, value })),
+      (facets.collections || []).map((row) => ({ label: row.value, value: row.count })),
     );
+    fillCollectionSelects(state.sources);
   } catch {
     row.hidden = true;
+  }
+}
+
+function fillCollectionSelects(sources) {
+  for (const id of ["collection-filter", "browse-collection"]) {
+    const sel = document.getElementById(id);
+    if (!sel) continue;
+    const current = sel.value || "cia";
+    const options = (sources || [])
+      .map((source) => `<option value="${escapeHtml(source.id)}">${escapeHtml(source.agency)}</option>`)
+      .join("");
+    sel.innerHTML = `${options}<option value="">All collections</option>`;
+    sel.value = [...sel.options].some((opt) => opt.value === current) ? current : "cia";
   }
 }
 
@@ -180,6 +188,7 @@ async function runSearch(ev) {
   const q = $("#q").value.trim();
   const top_k = Number($("#top-k").value);
   const mime = $("#mime-filter").value || null;
+  const source_id = $("#collection-filter").value || null;
   const status = $("#search-status");
   const box = $("#results");
   setStatus(status, "Searching the catalog…");
@@ -187,7 +196,7 @@ async function runSearch(ev) {
   try {
     const data = await api("/v1/search", {
       method: "POST",
-      body: JSON.stringify({ query: q, top_k, mime }),
+      body: JSON.stringify({ query: q, top_k, mime, source_id }),
     });
     setStatus(status, `${data.count} results for “${data.query}”`);
     box.innerHTML = (data.results || []).map(resultCard).join("") || "<p class='status'>No matches in holdings.</p>";
@@ -218,37 +227,8 @@ function multimodalBlock(doc) {
   return parts.join("");
 }
 
-async function openDocument(sha) {
-  const dialog = $("#doc-dialog");
-  const body = $("#dialog-body");
-  $("#dialog-title").textContent = "Loading record…";
-  body.innerHTML = "";
-  dialog.showModal();
-  try {
-    const doc = await api(`/v1/documents/${sha}`);
-    $("#dialog-title").textContent = doc.title || doc.source_url || sha.slice(0, 12);
-    const cite = doc.citation || {};
-    const mods = (doc.modalities || []).map((m) => `<span class="modality-tag">${escapeHtml(m)}</span>`).join(" ");
-    const captures = (doc.observations || [])
-      .map(
-        (obs) =>
-          `<li>${escapeHtml((obs.fetched_at || "").slice(0, 19))} · HTTP ${escapeHtml(obs.status_code)} · ${escapeHtml((obs.sha256 || "").slice(0, 12))} · ${escapeHtml(obs.url || "")}</li>`,
-      )
-      .join("");
-    body.innerHTML = `
-      <div class="meta" style="margin-bottom:1rem;font-family:var(--font-mono);font-size:0.75rem;color:var(--ink-soft)">
-        <div>${escapeHtml(cite.agency || doc.agency || "Unknown agency")} · ${escapeHtml(cite.collection || doc.source_id || "collection")} · ${escapeHtml(doc.mime || "")} · ${fmtNum(doc.text_chars)} chars ${mods}</div>
-        <div><a href="${safeHref(cite.source_url || doc.source_url)}" target="_blank" rel="noopener">${escapeHtml(cite.source_url || doc.source_url)}</a></div>
-        <div>sha256 ${escapeHtml(cite.source_sha256 || doc.source_sha256)} · fetched ${escapeHtml((cite.fetched_at || doc.fetched_at || "").slice(0, 19))} · <a href="/v1/raw/${escapeHtml(doc.source_sha256)}" target="_blank" rel="noopener">download raw</a></div>
-      </div>
-      ${captures ? `<div class="chunk"><strong>Captures</strong><ul>${captures}</ul></div>` : ""}
-      ${multimodalBlock(doc)}
-      ${(doc.chunks || []).map((c) => `<div class="chunk"><strong>Passage ${c.chunk_no}</strong>\n${escapeHtml(c.text)}</div>`).join("")
-        || (doc.text ? `<div class="chunk">${escapeHtml(doc.text.slice(0, 8000))}</div>` : "")}
-    `;
-  } catch (err) {
-    body.textContent = err.message;
-  }
+function openDocument(sha) {
+  if (sha) window.location.assign(`/d/${sha}`);
 }
 
 /* —— Force-directed knowledge graph —— */
@@ -1266,8 +1246,9 @@ async function loadBrowse() {
   const q = $("#browse-q").value.trim();
   setStatus(status, "Loading holdings…");
   try {
+    const source_id = $("#browse-collection")?.value || "";
     const data = await api(
-      `/v1/documents?limit=${state.browseLimit}&offset=${state.browseOffset}${q ? `&q=${encodeURIComponent(q)}` : ""}`,
+      `/v1/documents?limit=${state.browseLimit}&offset=${state.browseOffset}${q ? `&q=${encodeURIComponent(q)}` : ""}${source_id ? `&source_id=${encodeURIComponent(source_id)}` : ""}`,
     );
     state.browseTotal = data.total;
     const page = Math.floor(state.browseOffset / state.browseLimit) + 1;
@@ -1371,6 +1352,10 @@ function wire() {
     ev.preventDefault();
     state.browseOffset = 0;
     loadBrowse();
+  });
+  $("#browse-collection")?.addEventListener("change", () => {
+    state.browseOffset = 0;
+    if ($("#view-browse")?.classList.contains("is-active")) loadBrowse();
   });
   $("#browse-prev").addEventListener("click", () => {
     state.browseOffset = Math.max(0, state.browseOffset - state.browseLimit);
