@@ -302,7 +302,9 @@ enqueued only when they fall inside that collection. A document has a stable pag
 at `/d/{sha256}` with its citation, captures, and the text difference when the
 bytes change. Search and holdings default to the CIA collection, and they list the current
 capture of each URL. The requested URL, not a later redirect, identifies that
-chain. Older hashes stay addressable at `/d/{sha256}`. A document already
+chain. Older hashes stay addressable at `/d/{sha256}`. Holdings and search can
+include them with “Earlier captures”; each earlier row is marked so it is
+not mistaken for the current file. A document already
 tagged for one agency is not also counted under another.
 
 Every successful download and every not-modified check appends a capture

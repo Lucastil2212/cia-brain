@@ -113,6 +113,7 @@ function resultCard(r, index) {
         <span>${escapeHtml(r.mime || "unknown")}</span>
         <span>chunk ${r.chunk_no ?? 0}</span>
         <span>${escapeHtml((r.fetched_at || "").slice(0, 10))}</span>
+        ${r.current === false ? `<span>earlier capture</span>` : ""}
         ${mods}
         <a href="${safeHref(r.source_url)}" target="_blank" rel="noopener">source</a>
         <a href="/v1/raw/${escapeHtml(r.source_sha256)}" target="_blank" rel="noopener">raw</a>
@@ -189,6 +190,7 @@ async function runSearch(ev) {
   const top_k = Number($("#top-k").value);
   const mime = $("#mime-filter").value || null;
   const source_id = $("#collection-filter").value || null;
+  const include_history = $("#include-history")?.checked || false;
   const status = $("#search-status");
   const box = $("#results");
   setStatus(status, "Searching the catalog…");
@@ -196,7 +198,7 @@ async function runSearch(ev) {
   try {
     const data = await api("/v1/search", {
       method: "POST",
-      body: JSON.stringify({ query: q, top_k, mime, source_id }),
+      body: JSON.stringify({ query: q, top_k, mime, source_id, include_history }),
     });
     setStatus(status, `${data.count} results for “${data.query}”`);
     box.innerHTML = (data.results || []).map(resultCard).join("") || "<p class='status'>No matches in holdings.</p>";
@@ -1247,8 +1249,9 @@ async function loadBrowse() {
   setStatus(status, "Loading holdings…");
   try {
     const source_id = $("#browse-collection")?.value || "";
+    const history = $("#browse-history")?.checked ? 1 : 0;
     const data = await api(
-      `/v1/documents?limit=${state.browseLimit}&offset=${state.browseOffset}${q ? `&q=${encodeURIComponent(q)}` : ""}${source_id ? `&source_id=${encodeURIComponent(source_id)}` : ""}`,
+      `/v1/documents?limit=${state.browseLimit}&offset=${state.browseOffset}${q ? `&q=${encodeURIComponent(q)}` : ""}${source_id ? `&source_id=${encodeURIComponent(source_id)}` : ""}&history=${history}`,
     );
     state.browseTotal = data.total;
     const page = Math.floor(state.browseOffset / state.browseLimit) + 1;
@@ -1261,7 +1264,7 @@ async function loadBrowse() {
         (d) => `
       <button type="button" class="doc-row" data-sha="${escapeHtml(d.source_sha256)}">
         <strong>${escapeHtml(d.title || d.source_url || d.source_sha256)}</strong>
-        <span class="meta">${d.agency ? `${escapeHtml(d.agency)} · ` : ""}${escapeHtml(d.mime || "")} · ${fmtNum(d.text_chars)} chars · ${(d.fetched_at || "").slice(0, 10)}</span>
+        <span class="meta">${d.current === false ? "earlier capture · " : ""}${d.agency ? `${escapeHtml(d.agency)} · ` : ""}${escapeHtml(d.mime || "")} · ${fmtNum(d.text_chars)} chars · ${(d.fetched_at || "").slice(0, 10)}</span>
       </button>`,
       )
       .join("");
@@ -1354,6 +1357,10 @@ function wire() {
     loadBrowse();
   });
   $("#browse-collection")?.addEventListener("change", () => {
+    state.browseOffset = 0;
+    if ($("#view-browse")?.classList.contains("is-active")) loadBrowse();
+  });
+  $("#browse-history")?.addEventListener("change", () => {
     state.browseOffset = 0;
     if ($("#view-browse")?.classList.contains("is-active")) loadBrowse();
   });

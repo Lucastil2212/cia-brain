@@ -249,16 +249,17 @@ class HybridSearcher:
         until: str | None = None,
         sha256: str | None = None,
         source_id: str | None = None,
+        include_history: bool = False,
     ) -> list[dict]:
         top_k = top_k or self.s.default_top_k
         filtered = any([mime, since, until, sha256, source_id])
         candidate_k = max(50, top_k * (8 if filtered else 5))
         # Current captures are selected before the window is cut. A hash lookup
-        # still searches older text. Semantic search over-fetches, then drops
-        # superseded hits, because the vector index cannot filter by URL.
-        lexical = self._lexical(query, candidate_k, latest_only=not sha256)
-        semantic = self._semantic(query, candidate_k if sha256 else candidate_k * 4)
-        if not sha256:
+        # or an explicit history search still sees older text.
+        latest_only = not sha256 and not include_history
+        lexical = self._lexical(query, candidate_k, latest_only=latest_only)
+        semantic = self._semantic(query, candidate_k if latest_only else candidate_k * 4)
+        if latest_only:
             semantic = self._latest_chunk_ids(semantic)
         scores: dict[int, float] = {}
         for rank, cid in enumerate(lexical, 1):
@@ -276,9 +277,38 @@ class HybridSearcher:
                 )
             ]
         # A chosen hash still opens that capture. Ordinary search shows the current one.
-        if not sha256:
+        if latest_only:
             hydrated = self._prefer_latest(hydrated)
+        self._mark_current(hydrated)
         return hydrated[:top_k]
+
+    def _mark_current(self, items: list[dict]) -> None:
+        keys = list(
+            dict.fromkeys(
+                version_url(item.get("requested_url"), item.get("source_url"))
+                for item in items
+                if version_url(item.get("requested_url"), item.get("source_url"))
+            )
+        )
+        latest: dict[str, str] = {}
+        if keys:
+            placeholders = ",".join("?" * len(keys))
+            rows = self._rows(
+                f"""SELECT version_url, source_sha256 FROM (
+                      SELECT {VERSION_URL_SQL} AS version_url, source_sha256,
+                             ROW_NUMBER() OVER (
+                               PARTITION BY {VERSION_URL_SQL}
+                               ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
+                             ) AS rn
+                      FROM documents
+                      WHERE {VERSION_URL_SQL} IN ({placeholders})
+                    ) WHERE rn = 1""",
+                keys,
+            )
+            latest = {row["version_url"]: row["source_sha256"] for row in rows}
+        for item in items:
+            key = version_url(item.get("requested_url"), item.get("source_url"))
+            item["current"] = latest.get(key, item.get("source_sha256")) == item.get("source_sha256")
 
     def _latest_chunk_ids(self, chunk_ids: list[int]) -> list[int]:
         """Drop chunk ids that belong to a superseded capture, preserving rank order."""
@@ -392,6 +422,7 @@ class HybridSearcher:
         mime: str | None = None,
         q: str | None = None,
         source_id: str | None = None,
+        history: bool = False,
     ) -> dict:
         from .sources import collection_filter_sql
 
@@ -410,16 +441,31 @@ class HybridSearcher:
             params.extend([like, like])
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         latest = self._latest_id_sql(clause)
-        total = self._scalar(f"SELECT COUNT(*) FROM ({latest})", params) or 0
-        rows = self._rows(
-            f"""SELECT source_sha256,source_url,title,mime,size,fetched_at,text_chars,source_id,agency
-                FROM documents
-                WHERE id IN ({latest})
-                ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
-                LIMIT ? OFFSET ?""",
-            [*params, limit, offset],
-        )
-        return {"total": total, "limit": limit, "offset": offset, "documents": [dict(r) for r in rows]}
+        if history:
+            total = self._scalar(f"SELECT COUNT(*) FROM documents{clause}", params) or 0
+            rows = self._rows(
+                f"""SELECT source_sha256,source_url,title,mime,size,fetched_at,text_chars,source_id,agency,
+                           CASE WHEN id IN ({latest}) THEN 1 ELSE 0 END AS current
+                    FROM documents{clause}
+                    ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
+                    LIMIT ? OFFSET ?""",
+                [*params, *params, limit, offset],
+            )
+        else:
+            total = self._scalar(f"SELECT COUNT(*) FROM ({latest})", params) or 0
+            rows = self._rows(
+                f"""SELECT source_sha256,source_url,title,mime,size,fetched_at,text_chars,source_id,agency,
+                           1 AS current
+                    FROM documents
+                    WHERE id IN ({latest})
+                    ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
+                    LIMIT ? OFFSET ?""",
+                [*params, limit, offset],
+            )
+        documents = [dict(row) for row in rows]
+        for item in documents:
+            item["current"] = bool(item.get("current"))
+        return {"total": total, "limit": limit, "offset": offset, "documents": documents}
 
     def facets(self) -> dict:
         latest = self._latest_id_sql("")

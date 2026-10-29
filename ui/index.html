@@ -74,6 +74,7 @@
           <label>Collection <select id="collection-filter"><option value="cia" selected>CIA</option><option value="">All collections</option></select></label>
           <label>Format <select id="mime-filter"><option value="">Any format</option></select></label>
           <label>Results <select id="top-k"><option>8</option><option selected>12</option><option>24</option><option>40</option></select></label>
+          <label class="check"><input id="include-history" type="checkbox" /> Earlier captures</label>
         </div>
       </div>
       <div id="catalog-viz" class="viz-row" hidden>
@@ -211,6 +212,7 @@
       <form id="browse-form" class="row">
         <label>Collection <select id="browse-collection"><option value="cia" selected>CIA</option><option value="">All collections</option></select></label>
         <input id="browse-q" type="search" placeholder="Filter title or URL" />
+        <label class="check"><input id="browse-history" type="checkbox" /> Earlier captures</label>
         <button type="submit">Browse</button>
       </form>
       <div id="browse-status" class="status" hidden></div>

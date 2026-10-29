@@ -101,6 +101,7 @@ class SearchRequest(BaseModel):
     until: str | None = Field(default=None, max_length=64)
     sha256: str | None = Field(default=None, min_length=64, max_length=64)
     source_id: str | None = Field(default=None, max_length=64)
+    include_history: bool = False
 
 
 class TriggerJobRequest(BaseModel):
@@ -311,6 +312,7 @@ def search(req: SearchRequest):
         until=req.until,
         sha256=req.sha256.lower() if req.sha256 else None,
         source_id=req.source_id or None,
+        include_history=req.include_history,
     )
     return {"query": req.query, "count": len(results), "results": results}
 
@@ -324,10 +326,18 @@ def search_get(
     until: str | None = None,
     sha256: str | None = None,
     source_id: str | None = None,
+    include_history: bool = False,
 ):
     digest = _parse_sha256(sha256) if sha256 else None
     results = searcher().search(
-        q, top_k, mime=mime, since=since, until=until, sha256=digest, source_id=source_id or None
+        q,
+        top_k,
+        mime=mime,
+        since=since,
+        until=until,
+        sha256=digest,
+        source_id=source_id or None,
+        include_history=include_history,
     )
     return {"query": q, "count": len(results), "results": results}
 
@@ -339,9 +349,15 @@ def list_documents(
     mime: str | None = None,
     q: str | None = None,
     source_id: str | None = None,
+    history: int = Query(default=0, ge=0, le=1),
 ):
     return searcher().list_documents(
-        limit=limit, offset=offset, mime=mime, q=q, source_id=source_id or None
+        limit=limit,
+        offset=offset,
+        mime=mime,
+        q=q,
+        source_id=source_id or None,
+        history=bool(history),
     )
 
 

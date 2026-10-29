@@ -177,6 +177,14 @@ def test_catalog_lists_the_current_capture_only(tmp_path):
     assert {hit["source_sha256"] for hit in hits} == {new}
     older = searcher.search("mkultra", 10, sha256=old)
     assert older and older[0]["source_sha256"] == old
+    history = searcher.list_documents(history=True)
+    assert history["total"] == 2
+    assert {item["source_sha256"] for item in history["documents"]} == {old, new}
+    current_flags = {item["source_sha256"]: item["current"] for item in history["documents"]}
+    assert current_flags[new] is True
+    assert current_flags[old] is False
+    both = searcher.search("mkultra", 10, include_history=True)
+    assert {hit["source_sha256"] for hit in both} == {old, new}
     assert searcher.latest_sha(url) == new
     searcher.db.close()
 
