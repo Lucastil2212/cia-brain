@@ -258,6 +258,8 @@ class HybridSearcher:
         # superseded hits, because the vector index cannot filter by URL.
         lexical = self._lexical(query, candidate_k, latest_only=not sha256)
         semantic = self._semantic(query, candidate_k if sha256 else candidate_k * 4)
+        if not sha256:
+            semantic = self._latest_chunk_ids(semantic)
         scores: dict[int, float] = {}
         for rank, cid in enumerate(lexical, 1):
             scores[cid] = scores.get(cid, 0.0) + self.s.hybrid_lexical_weight / (self.s.rrf_k + rank)
@@ -277,6 +279,21 @@ class HybridSearcher:
         if not sha256:
             hydrated = self._prefer_latest(hydrated)
         return hydrated[:top_k]
+
+    def _latest_chunk_ids(self, chunk_ids: list[int]) -> list[int]:
+        """Drop chunk ids that belong to a superseded capture, preserving rank order."""
+        if not chunk_ids:
+            return []
+        placeholders = ",".join("?" * len(chunk_ids))
+        rows = self._rows(
+            f"""SELECT c.id FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE c.id IN ({placeholders})
+                  AND d.id IN ({self._latest_id_sql("")})""",
+            chunk_ids,
+        )
+        keep = {int(row["id"]) for row in rows}
+        return [cid for cid in chunk_ids if cid in keep]
 
     def _prefer_latest(self, items: list[dict]) -> list[dict]:
         urls = list(

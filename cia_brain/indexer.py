@@ -19,6 +19,50 @@ from .settings import Settings
 log = logging.getLogger(__name__)
 
 
+def pending_raw_payloads(settings: Settings) -> list[dict]:
+    """Raw files with a manifest and no extracted record, ready to normalize."""
+    from .paths import normalized_cas_path
+
+    root = settings.manifests_dir
+    if not root.is_dir():
+        return []
+    hexdigits = set("0123456789abcdef")
+    payloads: list[dict] = []
+    for path in sorted(root.glob("*/*.json")):
+        digest = path.stem
+        if len(digest) != 64 or not set(digest) <= hexdigits:
+            continue
+        if normalized_cas_path(settings, digest).is_file():
+            continue
+        raw_dir = settings.raw_dir / digest[:2] / digest[2:4]
+        matches = sorted(raw_dir.glob(f"{digest}.*")) if raw_dir.is_dir() else []
+        if not matches:
+            continue
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        sources = manifest.get("sources") or []
+        source = sources[0] if sources else {}
+        url = source.get("url") or source.get("final_url") or ""
+        final_url = source.get("final_url") or url
+        if not url or not final_url:
+            continue
+        raw = matches[0]
+        payloads.append(
+            {
+                "sha256": digest,
+                "path": str(raw),
+                "url": url,
+                "final_url": final_url,
+                "mime": manifest.get("mime") or "application/octet-stream",
+                "size": manifest.get("size") or raw.stat().st_size,
+                "fetched_at": source.get("fetched_at"),
+            }
+        )
+    return payloads
+
+
 def normalized_documents(settings: Settings) -> list[tuple[str, Path]]:
     """Content-addressed extracted records already stored under the lake."""
     root = settings.normalized_dir
@@ -210,7 +254,14 @@ class SearchStore:
         log.info("indexed %s chunks from %s", len(chunks), doc["source_url"])
 
     def index_missing(self) -> int:
-        """Index extracted files that are already on disk and absent from search."""
+        """Extract and index lake files that search does not have yet."""
+        from .extract import normalize_document
+
+        for payload in pending_raw_payloads(self.s):
+            try:
+                normalize_document(payload, self.s)
+            except Exception as exc:
+                log.warning("replay extract skipped %s: %s", payload.get("sha256"), exc)
         try:
             present = {row[0] for row in self.db.execute("SELECT source_sha256 FROM documents")}
         except sqlite3.Error as exc:

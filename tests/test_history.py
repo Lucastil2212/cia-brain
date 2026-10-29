@@ -181,6 +181,63 @@ def test_catalog_lists_the_current_capture_only(tmp_path):
     searcher.db.close()
 
 
+def test_pending_raw_payloads_skip_files_already_extracted(tmp_path):
+    import json
+
+    from cia_brain.indexer import pending_raw_payloads
+
+    settings = Settings(data_dir=tmp_path, _env_file=None)
+    settings.ensure_dirs()
+    digest = "cd" * 32
+    raw = settings.raw_dir / digest[:2] / digest[2:4] / f"{digest}.pdf"
+    raw.parent.mkdir(parents=True)
+    raw.write_bytes(b"%PDF-1.4")
+    manifest = settings.manifests_dir / digest[:2] / f"{digest}.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "sha256": digest,
+                "mime": "application/pdf",
+                "size": 8,
+                "sources": [
+                    {
+                        "url": "https://www.cia.gov/readingroom/document/1",
+                        "final_url": "https://www.cia.gov/readingroom/document/1",
+                        "fetched_at": "2026-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    found = pending_raw_payloads(settings)
+    assert len(found) == 1
+    assert found[0]["sha256"] == digest
+    assert found[0]["path"] == str(raw)
+    normalized = settings.normalized_dir / digest[:2] / f"{digest}.json.gz"
+    normalized.parent.mkdir(parents=True)
+    normalized.write_bytes(b"already")
+    assert pending_raw_payloads(settings) == []
+
+
+def test_semantic_candidates_drop_superseded_chunks(tmp_path):
+    settings = Settings(data_dir=tmp_path, _env_file=None)
+    settings.ensure_dirs()
+    searcher = HybridSearcher(settings)
+    url = "https://www.cia.gov/readingroom/document/memo"
+    _insert_version(searcher, "a" * 64, url, "2026-01-01T00:00:00+00:00", "older mkultra memo")
+    _insert_version(searcher, "b" * 64, url, "2026-06-01T00:00:00+00:00", "newer mkultra memo")
+    old_id = searcher.db.execute(
+        "SELECT id FROM chunks WHERE text LIKE 'older%'"
+    ).fetchone()[0]
+    new_id = searcher.db.execute(
+        "SELECT id FROM chunks WHERE text LIKE 'newer%'"
+    ).fetchone()[0]
+    assert searcher._latest_chunk_ids([old_id, new_id]) == [new_id]
+    searcher.db.close()
+
+
 def test_normalized_documents_lists_stored_hashes(tmp_path):
     import gzip
     import json

@@ -313,6 +313,10 @@ The downloads table still points at the latest bytes. Search hits and the docume
 a citation: agency, collection, title, source URL, SHA-256, and fetch time.
 The Collections tab shows the frontier status of each seed, including a refusal
 such as HTTP 403, instead of treating every listed agency as already archived.
+On startup the indexer extracts raw files that have a manifest but no normalized
+record, then indexes stored documents that search is missing. `replay_index`
+runs that same pass on demand. Semantic search drops superseded hashes before
+they affect ranking.
 
 The graph is a local SQLite WAL database at `data/state/graph.sqlite`, built during extraction
 without external graph databases or hosted AI. Entity extraction is controlled by `GRAPH_NER`:
