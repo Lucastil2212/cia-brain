@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     graph_spatial_radius_km: float = 250.0
     graph_ner: str = "auto"  # auto | rules | spacy
     job_graph_rebuild_interval_seconds: int = 0
+    job_replay_index_interval_seconds: int = 0
 
     crawl_delay_seconds: float = 10.0
     request_timeout_seconds: float = 90.0

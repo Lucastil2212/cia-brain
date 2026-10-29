@@ -19,6 +19,20 @@ from .settings import Settings
 log = logging.getLogger(__name__)
 
 
+def normalized_documents(settings: Settings) -> list[tuple[str, Path]]:
+    """Content-addressed extracted records already stored under the lake."""
+    root = settings.normalized_dir
+    if not root.is_dir():
+        return []
+    found: list[tuple[str, Path]] = []
+    hexdigits = set("0123456789abcdef")
+    for path in sorted(root.glob("*/*.json.gz")):
+        digest = path.name.removesuffix(".json.gz")
+        if len(digest) == 64 and set(digest) <= hexdigits:
+            found.append((digest, path))
+    return found
+
+
 def chunk_text(text: str, size: int, overlap: int) -> list[str]:
     text = text.strip()
     if not text:
@@ -194,6 +208,29 @@ class SearchStore:
             self.compact_parquet()
             self._docs_since_compact = 0
         log.info("indexed %s chunks from %s", len(chunks), doc["source_url"])
+
+    def index_missing(self) -> int:
+        """Index extracted files that are already on disk and absent from search."""
+        try:
+            present = {row[0] for row in self.db.execute("SELECT source_sha256 FROM documents")}
+        except sqlite3.Error as exc:
+            log.warning("replay index skipped; search store unavailable: %s", exc)
+            return 0
+        count = 0
+        for digest, path in normalized_documents(self.s):
+            if digest in present:
+                continue
+            try:
+                self.index_normalized(str(path), compact=False)
+            except Exception as exc:
+                log.warning("replay index skipped %s: %s", digest, exc)
+                continue
+            present.add(digest)
+            count += 1
+        if count:
+            self.flush()
+            self.compact_parquet()
+        return count
 
     def flush(self) -> None:
         """Persist any dirty vector index state to disk."""

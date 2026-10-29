@@ -552,6 +552,9 @@ class Crawler:
         await self.throttle.wait(url, robots.delay(url))
         tries = int(row["tries"]) + 1
         writer = None
+        html_buf = None
+        final_url = url
+        published = False
         try:
             async with checked_get(session, url, self.s, robots, self.throttle, headers=cond_headers) as resp:
                 if resp.status == 304:
@@ -571,7 +574,7 @@ class Crawler:
                     else:
                         self.frontier.mark_skip(url, f"HTTP {resp.status}")
                     return
-                final_url = canonicalize_url(str(resp.url))
+                final_url = canonicalize_url(str(resp.url)) or url
                 if not is_allowed_host(final_url, self.s.allowed_host_set):
                     self.frontier.mark_skip(url, "redirect_external")
                     return
@@ -609,13 +612,9 @@ class Crawler:
                 # Stay queued until search accepts the event. mark_done before
                 # publish left the bytes on disk with no second chance.
                 await publish_json(self.js, "cia.fetched", payload)
-                self.frontier.mark_done(url)
                 log.info("fetched %s bytes %s", event.size, url, extra={"url": url, "sha256": digest})
-
-                if html_buf is not None and depth < self.s.max_depth:
-                    for link in extract_links(bytes(html_buf), final_url):
-                        if is_allowed_host(link, self.s.allowed_host_set) and archive_url_allowed(link, self.s):
-                            self.frontier.add(link, depth + 1, final_url)
+                self.frontier.mark_done(url)
+                published = True
         except Exception as exc:
             if writer is not None:
                 try:
@@ -627,3 +626,11 @@ class Crawler:
             else:
                 self.frontier.mark_skip(url, repr(exc))
             log.warning("fetch failed %s: %s", url, exc)
+            return
+        if published and html_buf is not None and depth < self.s.max_depth:
+            try:
+                for link in extract_links(bytes(html_buf), final_url):
+                    if is_allowed_host(link, self.s.allowed_host_set) and archive_url_allowed(link, self.s):
+                        self.frontier.add(link, depth + 1, final_url)
+            except Exception as exc:
+                log.warning("link discovery failed %s: %s", url, exc)

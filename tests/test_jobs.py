@@ -11,6 +11,7 @@ def test_job_registry_contains_interval_jobs():
         "parquet_compact",
         "frontier_seed",
         "health_snapshot",
+        "replay_index",
     }
 
 

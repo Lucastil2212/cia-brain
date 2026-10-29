@@ -128,18 +128,30 @@ class HybridSearcher:
             self._mtime = mtime
             return idx
 
-    def _lexical(self, query: str, limit: int) -> list[int]:
+    def _lexical(self, query: str, limit: int, *, latest_only: bool = True) -> list[int]:
         # Quoting the user query avoids treating punctuation as FTS operators.
         terms = [t for t in query.replace('"', " ").split() if t]
         if not terms:
             return []
         fts_query = " OR ".join(f'"{t}"' for t in terms[:32])
-        try:
-            rows = self._rows(
+        if latest_only:
+            sql = f"""
+                SELECT chunks_fts.rowid
+                FROM chunks_fts
+                JOIN chunks c ON c.id = chunks_fts.rowid
+                JOIN documents d ON d.id = c.document_id
+                WHERE chunks_fts MATCH ?
+                  AND d.id IN ({self._latest_id_sql("")})
+                ORDER BY bm25(chunks_fts)
+                LIMIT ?
+            """
+        else:
+            sql = (
                 "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? "
-                "ORDER BY bm25(chunks_fts) LIMIT ?",
-                (fts_query, limit),
+                "ORDER BY bm25(chunks_fts) LIMIT ?"
             )
+        try:
+            rows = self._rows(sql, (fts_query, limit))
         except sqlite3.OperationalError as exc:
             log.warning("lexical search failed for %r: %s", query[:80], exc)
             return []
@@ -238,8 +250,11 @@ class HybridSearcher:
         top_k = top_k or self.s.default_top_k
         filtered = any([mime, since, until, sha256, source_id])
         candidate_k = max(50, top_k * (8 if filtered else 5))
-        lexical = self._lexical(query, candidate_k)
-        semantic = self._semantic(query, candidate_k)
+        # Current captures are selected before the window is cut. A hash lookup
+        # still searches older text. Semantic search over-fetches, then drops
+        # superseded hits, because the vector index cannot filter by URL.
+        lexical = self._lexical(query, candidate_k, latest_only=not sha256)
+        semantic = self._semantic(query, candidate_k if sha256 else candidate_k * 4)
         scores: dict[int, float] = {}
         for rank, cid in enumerate(lexical, 1):
             scores[cid] = scores.get(cid, 0.0) + self.s.hybrid_lexical_weight / (self.s.rrf_k + rank)

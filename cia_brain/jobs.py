@@ -65,6 +65,15 @@ def job_frontier_seed(settings: Settings) -> JobResult:
     return JobResult("frontier_seed", True, {"seeded": added, "seeds": settings.seed_url_list})
 
 
+def job_replay_index(settings: Settings) -> JobResult:
+    """Index normalized files already in the lake that search does not have yet."""
+    from .indexer import SearchStore
+
+    store = SearchStore(settings)
+    indexed = store.index_missing()
+    return JobResult("replay_index", True, {"indexed": indexed})
+
+
 def job_health_snapshot(settings: Settings) -> JobResult:
     """Capture lake + frontier counters for monitoring."""
     detail: dict = {"ran_at": utcnow()}
@@ -105,6 +114,7 @@ JOB_REGISTRY: dict[str, Callable[[Settings], JobResult]] = {
     "parquet_compact": job_parquet_compact,
     "frontier_seed": job_frontier_seed,
     "health_snapshot": job_health_snapshot,
+    "replay_index": job_replay_index,
 }
 
 

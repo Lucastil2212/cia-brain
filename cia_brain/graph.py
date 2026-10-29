@@ -425,15 +425,18 @@ class KnowledgeGraph:
             truncated=len(doc.get("text", "")) > len(text),
         )
         with self.connect() as db:
-            active = 1
-            if doc.get("record_id"):
-                newer = db.execute(
-                    "SELECT 1 FROM documents WHERE url=? AND fetched_at>? LIMIT 1",
-                    (doc["source_url"], doc.get("fetched_at", "")),
-                ).fetchone()
-                active = int(newer is None)
-                if active:
-                    db.execute("UPDATE documents SET active=0 WHERE url=?", (doc["source_url"],))
+            fetched = doc.get("fetched_at") or ""
+            newer = db.execute(
+                """SELECT 1 FROM documents
+                   WHERE url=? AND sha<>? AND COALESCE(fetched_at, '')>? LIMIT 1""",
+                (doc["source_url"], sha, fetched),
+            ).fetchone()
+            active = 0 if newer else 1
+            if active:
+                db.execute(
+                    "UPDATE documents SET active=0 WHERE url=? AND sha<>?",
+                    (doc["source_url"], sha),
+                )
             db.execute(
                 "INSERT OR REPLACE INTO documents VALUES(?,?,?,?,?,?,?,?)",
                 (

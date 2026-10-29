@@ -121,6 +121,22 @@ def test_spatial_correlations(tmp_path):
     assert hits[0]["distance_km"] < 100
 
 
+def test_older_crawl_hash_leaves_the_graph(tmp_path):
+    g = graph(tmp_path)
+    url = "https://www.cia.gov/readingroom/document/1"
+    g.ingest(document("a", "CIA and NASA.", source_url=url, fetched_at="2026-01-01T00:00:00+00:00"))
+    g.ingest(
+        document(
+            "b",
+            "FBI reviewed the file.",
+            source_url=url,
+            fetched_at="2026-06-01T00:00:00+00:00",
+        )
+    )
+    assert not g.entities("Central Intelligence Agency")
+    assert g.entities("Federal Bureau")
+
+
 def test_feed_revision_replay_does_not_restore_stale_entities(tmp_path):
     g = graph(tmp_path)
     old = document("a", "CIA and NASA.", record_id="same", source_url="https://api.gov/#same")

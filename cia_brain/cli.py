@@ -39,6 +39,7 @@ def main():
                         "parquet_compact": s.job_parquet_compact_interval_seconds,
                         "frontier_seed": s.job_frontier_seed_interval_seconds,
                         "health_snapshot": s.job_health_interval_seconds,
+                        "replay_index": s.job_replay_index_interval_seconds,
                     },
                 },
                 indent=2,

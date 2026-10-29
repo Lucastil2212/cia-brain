@@ -38,6 +38,7 @@ DESCRIPTIONS = {
     "frontier_seed": "Ensure configured seed URLs are in the frontier",
     "health_snapshot": "Record lake and frontier counters",
     "graph_rebuild": "Replay normalized documents into the local knowledge graph",
+    "replay_index": "Index stored documents that are missing from search",
 }
 
 
@@ -48,6 +49,7 @@ def intervals_from_settings(settings: Settings) -> dict[str, int]:
         "frontier_seed": settings.job_frontier_seed_interval_seconds,
         "health_snapshot": settings.job_health_interval_seconds,
         "graph_rebuild": settings.job_graph_rebuild_interval_seconds,
+        "replay_index": settings.job_replay_index_interval_seconds,
     }
 
 

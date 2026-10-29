@@ -181,6 +181,26 @@ def test_catalog_lists_the_current_capture_only(tmp_path):
     searcher.db.close()
 
 
+def test_normalized_documents_lists_stored_hashes(tmp_path):
+    import gzip
+    import json
+
+    from cia_brain.indexer import normalized_documents
+
+    settings = Settings(data_dir=tmp_path, _env_file=None)
+    settings.ensure_dirs()
+    digest = "ab" * 32
+    path = settings.normalized_dir / digest[:2] / f"{digest}.json.gz"
+    path.parent.mkdir(parents=True)
+    with gzip.open(path, "wt", encoding="utf-8") as stream:
+        json.dump({"source_sha256": digest, "text": "memo"}, stream)
+    junk = settings.normalized_dir / "zz" / "not-a-hash.json.gz"
+    junk.parent.mkdir(parents=True)
+    junk.write_bytes(b"nope")
+    found = normalized_documents(settings)
+    assert [item[0] for item in found] == [digest]
+
+
 def test_document_page_shows_a_byte_change():
     from cia_brain.api import _document_page
 
