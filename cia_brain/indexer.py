@@ -13,6 +13,7 @@ import pandas as pd
 from usearch.index import Index
 
 from .embedding import Embedder
+from .history import ensure_provenance_columns
 from .settings import Settings
 
 log = logging.getLogger(__name__)
@@ -93,6 +94,7 @@ class SearchStore:
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(documents)")}
         if "source_urls_json" not in cols:
             self.db.execute("ALTER TABLE documents ADD COLUMN source_urls_json TEXT NOT NULL DEFAULT '[]'")
+        ensure_provenance_columns(self.db)
         self.db.commit()
         self.embedder = embedder or Embedder(settings)
         self.lock = threading.RLock()
@@ -124,6 +126,13 @@ class SearchStore:
     def index_normalized(self, normalized_path: str, compact: bool = True) -> None:
         with gzip.open(normalized_path, "rt", encoding="utf-8") as f:
             doc = json.load(f)
+        if not doc.get("source_id"):
+            from .sources import source_for_url
+
+            origin = source_for_url(doc.get("source_url") or "", self.s)
+            if origin:
+                doc["source_id"] = origin.id
+                doc["agency"] = doc.get("agency") or origin.agency
         chunks = chunk_text(doc.get("text", ""), self.s.chunk_chars, self.s.chunk_overlap)
         with self.lock:
             row = self.db.execute("SELECT id FROM documents WHERE source_sha256=?", (doc["source_sha256"],)).fetchone()
@@ -138,21 +147,23 @@ class SearchStore:
                 self.db.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
                 self.db.execute(
                     """UPDATE documents SET source_url=?,source_urls_json=?,requested_url=?,title=?,mime=?,size=?,fetched_at=?,
-                       extracted_at=?,text_chars=? WHERE id=?""",
+                       extracted_at=?,text_chars=?,source_id=?,agency=? WHERE id=?""",
                     (
                         doc["source_url"], json.dumps(doc.get("source_urls", [doc["source_url"]])),
                         doc.get("requested_url"), doc.get("title"), doc.get("mime"), doc.get("size"),
-                        doc.get("fetched_at"), doc.get("extracted_at"), doc.get("text_chars"), document_id,
+                        doc.get("fetched_at"), doc.get("extracted_at"), doc.get("text_chars"),
+                        doc.get("source_id"), doc.get("agency"), document_id,
                     ),
                 )
             else:
                 cur = self.db.execute(
-                    """INSERT INTO documents(source_sha256,source_url,source_urls_json,requested_url,title,mime,size,fetched_at,extracted_at,text_chars)
-                       VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    """INSERT INTO documents(source_sha256,source_url,source_urls_json,requested_url,title,mime,size,fetched_at,extracted_at,text_chars,source_id,agency)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         doc["source_sha256"], doc["source_url"], json.dumps(doc.get("source_urls", [doc["source_url"]])),
                         doc.get("requested_url"), doc.get("title"), doc.get("mime"), doc.get("size"),
                         doc.get("fetched_at"), doc.get("extracted_at"), doc.get("text_chars"),
+                        doc.get("source_id"), doc.get("agency"),
                     ),
                 )
                 document_id = int(cur.lastrowid)

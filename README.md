@@ -287,7 +287,7 @@ through `ARCHIVE_SOURCES=fbi,nsa,nara,state,odni,dia,crs`:
 [FBI Vault](https://vault.fbi.gov/), [NSA declassification](https://www.nsa.gov/Helpful-Links/NSA-FOIA/Declassification-Transparency-Initiatives/),
 [National Archives declassification](https://www.archives.gov/declassification),
 [State Department historical documents](https://history.state.gov/historicaldocuments),
-[ODNI FOIA](https://www.dni.gov/index.php/foia),
+[ODNI FOIA](https://www.odni.gov/accountability/),
 [DIA FOIA Electronic Reading Room](https://www.dia.mil/FOIA/FOIA-Electronic-Reading-Room/), and
 [CRS reports](https://crsreports.congress.gov/).
 These include FOIA releases and historical publications; public availability alone does not
@@ -296,6 +296,13 @@ are crawled subject to robots rules, throttling, and configured depth.
 New collection hosts are discovered from their seeds rather than loading entire agency sitemaps.
 Redirect destinations are checked before requests. A robots denial remains a denial.
 Set `ARCHIVE_SOURCES=` to keep only the CIA hosts and seeds.
+
+Every successful download and every not-modified check appends a capture
+(`url`, SHA-256, status, fetch time) in `crawl.sqlite`. The downloads table
+still points at the latest bytes. Search hits and the document record include
+a citation: agency, collection, title, source URL, SHA-256, and fetch time.
+The Collections tab shows the frontier status of each seed, including a refusal
+such as HTTP 403, instead of treating every listed agency as already archived.
 
 The graph is a local SQLite WAL database at `data/state/graph.sqlite`, built during extraction
 without external graph databases or hosted AI. Entity extraction is controlled by `GRAPH_NER`:

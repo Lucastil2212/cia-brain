@@ -17,9 +17,10 @@ from bs4 import BeautifulSoup
 
 from .backoff import parse_retry_after
 from .bus import connect, publish_json
+from .history import append_observation, ensure_observations
 from .models import FetchedEvent
 from .settings import Settings
-from .sources import archive_url_allowed
+from .sources import archive_url_allowed, source_for_url
 from .storage import StreamingCASWriter, disk_free_gb, utcnow, write_manifest
 
 log = logging.getLogger(__name__)
@@ -135,6 +136,7 @@ class Frontier:
             );
             """
         )
+        ensure_observations(self.db)
         self.db.commit()
 
     def add(self, url: str, depth: int, discovered_from: str | None = None) -> None:
@@ -197,6 +199,32 @@ class Frontier:
                 event.fetched_at,
                 event.depth,
             ),
+        )
+        append_observation(
+            self.db,
+            url=event.url,
+            final_url=event.final_url,
+            sha256=event.sha256,
+            status_code=event.status_code,
+            fetched_at=event.fetched_at,
+            mime=event.mime,
+        )
+        self.db.commit()
+
+    def note_not_modified(self, url: str, fetched_at: str) -> None:
+        """Record a conditional refetch that did not change the stored bytes."""
+        row = self.db.execute(
+            "SELECT final_url, sha256, mime FROM downloads WHERE url=?",
+            (url,),
+        ).fetchone()
+        append_observation(
+            self.db,
+            url=url,
+            final_url=row["final_url"] if row else url,
+            sha256=row["sha256"] if row else None,
+            status_code=304,
+            fetched_at=fetched_at,
+            mime=row["mime"] if row else None,
         )
         self.db.commit()
 
@@ -519,6 +547,7 @@ class Crawler:
         try:
             async with checked_get(session, url, self.s, robots, self.throttle, headers=cond_headers) as resp:
                 if resp.status == 304:
+                    self.frontier.note_not_modified(url, utcnow())
                     self.frontier.mark_done(url)
                     return
                 if resp.status >= 400:
@@ -565,7 +594,12 @@ class Crawler:
                 write_manifest(self.s, digest, manifest)
                 self.frontier.save_download(event, dict(resp.headers))
                 self.frontier.mark_done(url)
-                await publish_json(self.js, "cia.fetched", event.to_dict())
+                payload = event.to_dict()
+                origin = source_for_url(final_url or url, self.s)
+                if origin:
+                    payload["source_id"] = origin.id
+                    payload["agency"] = origin.agency
+                await publish_json(self.js, "cia.fetched", payload)
                 log.info("fetched %s bytes %s", event.size, url, extra={"url": url, "sha256": digest})
 
                 if html_buf is not None and depth < self.s.max_depth:

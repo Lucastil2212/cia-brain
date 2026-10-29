@@ -206,6 +206,13 @@ def normalize_document(payload: dict, settings: Settings) -> ExtractedEvent:
     for key in ("source_id", "agency", "modalities", "record_id"):
         if key in payload:
             doc[key] = payload[key]
+    if not doc.get("source_id"):
+        from .sources import source_for_url
+
+        origin = source_for_url(doc["source_url"], settings)
+        if origin:
+            doc["source_id"] = origin.id
+            doc["agency"] = origin.agency
     if payload.get("mime", "").startswith("image/") and not text:
         doc["title"] = title = payload.get("title", "Public source image")
         doc["text"] = text = title + " — image archived; visual content not interpreted."

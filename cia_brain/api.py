@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from .auth_routes import require_admin, router as auth_router
 from .db import DatabaseUnavailable, database_configured, database_problem, disable_database
+from .history import citation_for, observations_for
 from .log import configure_logging
 from .middleware import AuthRateLimitMiddleware
 from .paths import require_sha256
@@ -137,7 +138,21 @@ def _parse_sha256(value: str) -> str:
 def sources():
     from .sources import catalog
 
-    return {"sources": catalog(s)}
+    items = catalog(s)
+    path = s.state_dir / "crawl.sqlite"
+    if path.exists():
+        try:
+            with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
+                db.row_factory = sqlite3.Row
+                for item in items:
+                    row = db.execute(
+                        "SELECT status, last_error, updated_at FROM frontier WHERE url=?",
+                        (item["url"],),
+                    ).fetchone()
+                    item["status"] = dict(row) if row else None
+        except sqlite3.Error as exc:
+            log.warning("collection status unavailable: %s", exc)
+    return {"sources": items}
 
 
 def graph():
@@ -308,12 +323,20 @@ def get_document(sha256: str):
                 "snapshot_sha256",
                 "text",
             ):
-                if key in record and key not in doc:
+                if key in record and not doc.get(key):
                     doc[key] = record[key]
-                elif key in record and key == "text" and not doc.get("chunks"):
-                    doc["text"] = record[key]
         except Exception:
             pass
+    if not doc.get("source_id"):
+        from .sources import source_for_url
+
+        origin = source_for_url(doc.get("source_url") or "", s)
+        if origin:
+            doc["source_id"] = origin.id
+            doc["agency"] = doc.get("agency") or origin.agency
+    doc["citation"] = citation_for(doc)
+    urls = [doc.get("source_url"), doc.get("requested_url"), *(doc.get("source_urls") or [])]
+    doc["observations"] = observations_for(s, digest, urls)
     if s.graph_enabled:
         try:
             gdoc = graph().document(digest)

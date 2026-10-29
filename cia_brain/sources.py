@@ -16,6 +16,14 @@ class Source:
 
 
 SOURCES = (
+    Source(
+        "cia",
+        "CIA",
+        "https://www.cia.gov/readingroom/",
+        "archive",
+        ("text", "pdf"),
+        documentation="https://www.cia.gov/readingroom/",
+    ),
     Source("fbi", "FBI", "https://vault.fbi.gov/", "archive", ("text", "pdf")),
     Source(
         "nsa",
@@ -35,10 +43,10 @@ SOURCES = (
     Source(
         "odni",
         "ODNI",
-        "https://www.dni.gov/index.php/foia",
+        "https://www.odni.gov/accountability/",
         "archive",
         ("text", "pdf"),
-        documentation="https://www.dni.gov/index.php/foia",
+        documentation="https://www.odni.gov/accountability/",
     ),
     Source(
         "dia",
@@ -87,7 +95,40 @@ def archive_hosts(ids: str) -> set[str]:
 
 def catalog(settings) -> list[dict]:
     enabled = {s.id for s in selected_sources(settings.archive_sources, True)}
+    allowed = {x.strip().lower() for x in settings.allowed_hosts.split(",") if x.strip()}
+    if allowed & {"cia.gov", "www.cia.gov"}:
+        enabled.add("cia")
     return [asdict(s) | {"enabled": s.id in enabled} for s in SOURCES]
+
+
+def source_for_url(url: str, settings) -> Source | None:
+    """Collection that owns a crawled URL, used to stamp agency provenance."""
+    from posixpath import normpath
+
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if not host:
+        return None
+    allowed = {x.strip().lower() for x in settings.allowed_hosts.split(",") if x.strip()}
+    if host in allowed:
+        return next((s for s in SOURCES if s.id == "cia"), None)
+    path = normpath(parts.path or "/")
+    selected = {x.strip() for x in settings.archive_sources.split(",") if x.strip()}
+    for source in selected_sources(settings.archive_sources, True):
+        root = urlsplit(source.url)
+        if host != (root.hostname or "").lower():
+            continue
+        if source.id in {"fbi", "crs"}:
+            return source
+        root_path = normpath(root.path or "/")
+        if path.startswith(root_path.rstrip("/") + "/") or path.rstrip("/") == root_path.rstrip("/"):
+            return source
+        if path.startswith("/files/") or "/foia" in path.lower() or "/readingroom" in path.lower().replace("-", ""):
+            return source
+    for source_id, extras in ATTACHMENT_HOSTS.items():
+        if source_id in selected and host in extras:
+            return next(s for s in SOURCES if s.id == source_id)
+    return None
 
 
 def archive_url_allowed(url: str, settings) -> bool:

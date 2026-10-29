@@ -103,11 +103,13 @@ function resultCard(r, index) {
   const title = r.title || "(untitled)";
   const score = typeof r.score === "number" ? r.score.toFixed(4) : "—";
   const mods = (r.modalities || []).map((m) => `<span class="modality-tag">${escapeHtml(m)}</span>`).join(" ");
+  const agency = r.citation?.agency || r.agency;
   return `
     <article class="result" style="animation-delay:${index * 40}ms">
       <h3>${escapeHtml(title)}</h3>
       <div class="meta">
         <span class="score">RRF ${score}</span>
+        ${agency ? `<span>${escapeHtml(agency)}</span>` : ""}
         <span>${escapeHtml(r.mime || "unknown")}</span>
         <span>chunk ${r.chunk_no ?? 0}</span>
         <span>${escapeHtml((r.fetched_at || "").slice(0, 10))}</span>
@@ -225,14 +227,21 @@ async function openDocument(sha) {
   try {
     const doc = await api(`/v1/documents/${sha}`);
     $("#dialog-title").textContent = doc.title || doc.source_url || sha.slice(0, 12);
+    const cite = doc.citation || {};
     const mods = (doc.modalities || []).map((m) => `<span class="modality-tag">${escapeHtml(m)}</span>`).join(" ");
+    const captures = (doc.observations || [])
+      .map(
+        (obs) =>
+          `<li>${escapeHtml((obs.fetched_at || "").slice(0, 19))} · HTTP ${escapeHtml(obs.status_code)} · ${escapeHtml((obs.sha256 || "").slice(0, 12))} · ${escapeHtml(obs.url || "")}</li>`,
+      )
+      .join("");
     body.innerHTML = `
       <div class="meta" style="margin-bottom:1rem;font-family:var(--font-mono);font-size:0.75rem;color:var(--ink-soft)">
-        <div>${escapeHtml(doc.mime || "")} · ${fmtNum(doc.text_chars)} chars · fetched ${escapeHtml((doc.fetched_at || "").slice(0, 19))}
-          ${doc.agency ? ` · ${escapeHtml(doc.agency)}` : ""} ${mods}</div>
-        <div><a href="${safeHref(doc.source_url)}" target="_blank" rel="noopener">${escapeHtml(doc.source_url)}</a></div>
-        <div>sha256 ${escapeHtml(doc.source_sha256)} · <a href="/v1/raw/${escapeHtml(doc.source_sha256)}" target="_blank" rel="noopener">download raw</a></div>
+        <div>${escapeHtml(cite.agency || doc.agency || "Unknown agency")} · ${escapeHtml(cite.collection || doc.source_id || "collection")} · ${escapeHtml(doc.mime || "")} · ${fmtNum(doc.text_chars)} chars ${mods}</div>
+        <div><a href="${safeHref(cite.source_url || doc.source_url)}" target="_blank" rel="noopener">${escapeHtml(cite.source_url || doc.source_url)}</a></div>
+        <div>sha256 ${escapeHtml(cite.source_sha256 || doc.source_sha256)} · fetched ${escapeHtml((cite.fetched_at || doc.fetched_at || "").slice(0, 19))} · <a href="/v1/raw/${escapeHtml(doc.source_sha256)}" target="_blank" rel="noopener">download raw</a></div>
       </div>
+      ${captures ? `<div class="chunk"><strong>Captures</strong><ul>${captures}</ul></div>` : ""}
       ${multimodalBlock(doc)}
       ${(doc.chunks || []).map((c) => `<div class="chunk"><strong>Passage ${c.chunk_no}</strong>\n${escapeHtml(c.text)}</div>`).join("")
         || (doc.text ? `<div class="chunk">${escapeHtml(doc.text.slice(0, 8000))}</div>` : "")}
@@ -1057,13 +1066,20 @@ async function loadSources() {
           s.interval ? `polls every ${s.interval}s` : "robots-aware archive crawl"
         }</p>
         <p><a href="${safeHref(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a></p>
-        <p class="meta">${escapeHtml(s.status?.error || "Robots-aware crawl of this collection")}</p>
+        <p class="meta">${escapeHtml(collectionStatus(s))}</p>
       </article>`,
       )
       .join("");
   } catch (err) {
     $("#source-list").textContent = err.message;
   }
+}
+
+function collectionStatus(source) {
+  const status = source.status;
+  if (!status) return "Not in the crawl frontier yet";
+  if (status.last_error) return `${status.status || "error"}: ${status.last_error}`;
+  return status.status || "queued";
 }
 
 function galleryPreview(doc) {
@@ -1264,7 +1280,7 @@ async function loadBrowse() {
         (d) => `
       <button type="button" class="doc-row" data-sha="${escapeHtml(d.source_sha256)}">
         <strong>${escapeHtml(d.title || d.source_url || d.source_sha256)}</strong>
-        <span class="meta">${escapeHtml(d.mime || "")} · ${fmtNum(d.text_chars)} chars · ${(d.fetched_at || "").slice(0, 10)}</span>
+        <span class="meta">${d.agency ? `${escapeHtml(d.agency)} · ` : ""}${escapeHtml(d.mime || "")} · ${fmtNum(d.text_chars)} chars · ${(d.fetched_at || "").slice(0, 10)}</span>
       </button>`,
       )
       .join("");

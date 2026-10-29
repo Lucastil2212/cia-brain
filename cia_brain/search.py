@@ -8,6 +8,7 @@ import threading
 from contextlib import closing
 from typing import TYPE_CHECKING
 
+from .history import citation_for, ensure_provenance_columns
 from .settings import Settings
 
 if TYPE_CHECKING:
@@ -92,6 +93,7 @@ class HybridSearcher:
             CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """
         )
+        ensure_provenance_columns(self.db)
         self.db.commit()
 
     def _get_embedder(self) -> Embedder:
@@ -171,7 +173,7 @@ class HybridSearcher:
         placeholders = ",".join("?" * len(ranked))
         rows = self._rows(
             f"""SELECT c.id,c.chunk_no,c.text,d.source_sha256,d.source_url,d.source_urls_json,
-                      d.title,d.mime,d.fetched_at,d.text_chars
+                      d.title,d.mime,d.fetched_at,d.text_chars,d.source_id,d.agency
                FROM chunks c JOIN documents d ON d.id=c.document_id
                WHERE c.id IN ({placeholders})""",
             ranked,
@@ -188,6 +190,14 @@ class HybridSearcher:
             except Exception:
                 item["source_urls"] = [item["source_url"]]
             item["score"] = scores[cid]
+            if not item.get("source_id"):
+                from .sources import source_for_url
+
+                origin = source_for_url(item.get("source_url") or "", self.s)
+                if origin:
+                    item["source_id"] = origin.id
+                    item["agency"] = item.get("agency") or origin.agency
+            item["citation"] = citation_for(item)
             out.append(item)
         return out
 
@@ -244,7 +254,7 @@ class HybridSearcher:
     def document(self, sha256: str) -> dict | None:
         rows = self._rows(
             """SELECT id,source_sha256,source_url,source_urls_json,requested_url,title,mime,size,
-                      fetched_at,extracted_at,text_chars
+                      fetched_at,extracted_at,text_chars,source_id,agency
                FROM documents WHERE source_sha256=?""",
             (sha256.lower(),),
         )
@@ -260,6 +270,14 @@ class HybridSearcher:
             (doc["id"],),
         )
         doc["chunks"] = [dict(c) for c in chunks]
+        if not doc.get("source_id"):
+            from .sources import source_for_url
+
+            origin = source_for_url(doc.get("source_url") or "", self.s)
+            if origin:
+                doc["source_id"] = origin.id
+                doc["agency"] = doc.get("agency") or origin.agency
+        doc["citation"] = citation_for(doc)
         return doc
 
     def list_documents(
@@ -282,7 +300,7 @@ class HybridSearcher:
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         total = self._scalar(f"SELECT COUNT(*) FROM documents{clause}", params) or 0
         rows = self._rows(
-            f"""SELECT source_sha256,source_url,title,mime,size,fetched_at,text_chars
+            f"""SELECT source_sha256,source_url,title,mime,size,fetched_at,text_chars,source_id,agency
                 FROM documents{clause}
                 ORDER BY (fetched_at IS NULL), fetched_at DESC, id DESC
                 LIMIT ? OFFSET ?""",
