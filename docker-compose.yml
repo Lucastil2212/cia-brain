@@ -5,7 +5,7 @@ x-app: &app
   env_file: .env
   volumes:
     - ./data:/data
-  restart: unless-stopped
+  restart: "no"
   depends_on:
     nats:
       condition: service_healthy
@@ -23,7 +23,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    restart: unless-stopped
+    restart: "no"
 
   postgres:
     image: postgres:16-alpine
@@ -40,7 +40,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    restart: unless-stopped
+    restart: "no"
 
   crawler:
     <<: *app
@@ -100,7 +100,7 @@ services:
       - ollama-data:/root/.ollama
     ports:
       - "127.0.0.1:11434:11434"
-    restart: unless-stopped
+    restart: "no"
 
   model-init:
     image: curlimages/curl:latest

@@ -1043,3 +1043,369 @@ button.linkish {
     gap: 0.75rem;
   }
 }
+
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(280px, 340px);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.workbench .rail,
+.workbench .dossier {
+  position: sticky;
+  top: 4.6rem;
+  max-height: calc(100vh - 5.5rem);
+  overflow: auto;
+}
+
+.rail-filters {
+  margin-top: 0.75rem;
+}
+
+.rail .search-form {
+  grid-template-columns: 1fr;
+}
+
+.collection-shelf {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.5rem 0 0.25rem;
+}
+
+button.shelf-chip,
+button.rel-row,
+button.entity-chip {
+  background: transparent;
+  color: var(--ink);
+  border: 0;
+  border-radius: 0;
+  font-weight: 500;
+}
+
+button.shelf-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  border: 1px solid var(--line);
+  padding: 0.35rem 0.65rem;
+}
+
+button.shelf-chip small,
+button.rel-row small {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+}
+
+button.shelf-chip:hover,
+button.rel-row:hover {
+  background: transparent;
+  color: var(--accent-ink);
+}
+
+.record {
+  padding: 1rem 0 1.1rem;
+  border-top: 1px solid var(--line);
+}
+
+.record-kicker {
+  margin: 0 0 0.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.record h3 {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-display);
+  font-size: 1.45rem;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.record h3 a,
+.sheet a,
+.source-card h4 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.record h3 a:hover,
+.sheet a:hover,
+.source-card h4 a:hover {
+  color: var(--accent-ink);
+}
+
+.record .excerpt {
+  margin: 0 0 0.55rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.record-actions a {
+  color: var(--accent-ink);
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin-top: 0.75rem;
+}
+
+.sheet {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sheet th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding: 0.4rem 0.7rem 0.4rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.sheet td {
+  padding: 0.75rem 0.85rem 0.75rem 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.sheet .meta {
+  margin-top: 0.15rem;
+}
+
+.workbench .dossier,
+.record-layout .dossier {
+  border-left: 1px solid var(--line);
+  padding: 0.15rem 0 1.5rem 1rem;
+}
+
+.dossier h2,
+.dossier h3,
+.dossier h4 {
+  font-family: var(--font-display);
+  line-height: 1.15;
+}
+
+.dossier h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1.7rem;
+}
+
+.dossier h3 em {
+  font-style: italic;
+  color: var(--accent-ink);
+}
+
+.dossier h4 {
+  margin: 1rem 0 0.35rem;
+  font-size: 1.15rem;
+}
+
+.attrs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem 0.8rem;
+  margin: 0.8rem 0 0.2rem;
+}
+
+.attrs div {
+  border-top: 1px solid var(--line);
+  padding-top: 0.3rem;
+}
+
+.attrs dt {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.attrs dd {
+  margin: 0.1rem 0 0;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+}
+
+button.rel-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.source-card {
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.source-card h4 {
+  margin: 0 0 0.15rem;
+  font-size: 1.05rem;
+}
+
+.dossier blockquote {
+  margin: 0.35rem 0 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--brass-soft);
+  color: var(--ink-soft);
+}
+
+.related-list p {
+  margin: 0.35rem 0;
+}
+
+.record-body {
+  background: var(--paper);
+}
+
+.record-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.75rem var(--gutter);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: rgba(243, 245, 243, 0.94);
+  z-index: 5;
+}
+
+.record-nav {
+  display: flex;
+  gap: 1rem;
+}
+
+.record-nav a {
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+
+.record-layout {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 1.5rem var(--gutter) 3rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  gap: 2rem;
+  align-items: start;
+}
+
+.record-read h1 {
+  margin: 0.15rem 0 0.55rem;
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 4vw, 3.1rem);
+  line-height: 1.05;
+}
+
+.record-read h2 {
+  margin: 1.5rem 0 0.6rem;
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+}
+
+.reading {
+  max-width: 42rem;
+}
+
+.reading p {
+  margin: 0 0 0.8rem;
+}
+
+.entity-jumps {
+  display: grid;
+}
+
+.entity-jump {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+}
+
+.entity-jump small {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+  text-transform: capitalize;
+}
+
+.entity-jump:hover {
+  color: var(--accent-ink);
+}
+
+.banner {
+  margin: 0.75rem 0;
+  padding: 0.6rem 0.75rem;
+  background: #f4ead2;
+  border-left: 3px solid var(--brass);
+}
+
+.record-image {
+  display: block;
+  max-width: 100%;
+  margin: 0.75rem 0;
+  border: 1px solid var(--line);
+}
+
+iframe.media-frame {
+  width: 100%;
+  height: 72vh;
+  border: 0;
+}
+
+.timeline {
+  margin: 0;
+  padding-left: 1.15rem;
+}
+
+.timeline li {
+  margin: 0.35rem 0;
+}
+
+.dossier-sha {
+  margin-top: 1rem;
+  word-break: break-all;
+}
+
+@media (max-width: 1100px) {
+  .workbench,
+  .record-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .workbench .rail,
+  .workbench .dossier,
+  .record-layout .dossier {
+    position: static;
+    max-height: none;
+    border-left: 0;
+    padding-left: 0;
+  }
+}

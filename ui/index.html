@@ -64,7 +64,7 @@
       <div class="hero">
         <p class="eyebrow">Declassified collections</p>
         <h1 class="brand-hero">CIA Brain</h1>
-        <p class="lede">A finding aid for public declassified and historical documents, centered on the CIA reading room and the other U.S. intelligence collections mirrored here.</p>
+        <p class="lede">Search a public record, open the capture, then trace the names in it through the knowledge graph. Each link stays attached to the archived document it came from.</p>
         <form id="search-form" class="search-form" autocomplete="off">
           <label class="sr-only" for="q">Catalog query</label>
           <input id="q" name="q" type="search" placeholder="Search titles, programs, places, agencies…" required />
@@ -77,16 +77,7 @@
           <label class="check"><input id="include-history" type="checkbox" /> Earlier captures</label>
         </div>
       </div>
-      <div id="catalog-viz" class="viz-row" hidden>
-        <figure class="viz-panel">
-          <figcaption>Holdings by format</figcaption>
-          <div id="mime-chart" class="chart" role="img" aria-label="MIME distribution chart"></div>
-        </figure>
-        <figure class="viz-panel">
-          <figcaption>Holdings by collection</figcaption>
-          <div id="modality-chart" class="chart" role="img" aria-label="Modality distribution chart"></div>
-        </figure>
-      </div>
+      <div id="catalog-viz" class="collection-shelf" hidden></div>
       <div id="search-status" class="status" hidden></div>
       <div id="results" class="results"></div>
     </section>
@@ -94,62 +85,46 @@
     <section id="view-graph" class="view">
       <div class="panel-head">
         <h2>Knowledge graph</h2>
-        <p>Interactive analytics over inferred entity links. Edges are evidence-backed candidates — not established facts.</p>
+        <p>Click a name or a line. The dossier lists what was inferred, which sentence supports it, and the archived record to open.</p>
       </div>
-      <div id="graph-stats" class="status"></div>
-      <div class="viz-row" id="graph-analytics-row">
-        <figure class="viz-panel">
-          <figcaption>Relation mix</figcaption>
-          <div id="graph-relation-chart" class="chart"></div>
-        </figure>
-        <figure class="viz-panel">
-          <figcaption>Entity kinds</figcaption>
-          <div id="graph-kind-chart" class="chart"></div>
-        </figure>
-        <figure class="viz-panel">
-          <figcaption>Highest-degree hubs</figcaption>
-          <div id="graph-hub-chart" class="chart"></div>
-        </figure>
-      </div>
-      <div class="graph-toolbar filters">
-        <form id="graph-form" class="search-form" style="flex:1;margin:0">
-          <label class="sr-only" for="graph-q">Entity</label>
-          <input id="graph-q" placeholder="Find an entity, e.g. NASA or Dulles" />
-          <button type="submit">Look up</button>
-        </form>
-        <label>Relation
-          <select id="graph-relation">
-            <option value="">All relations</option>
-          </select>
-        </label>
-        <label>View
-          <select id="graph-mode">
-            <option value="overview">Overview hubs</option>
-            <option value="neighborhood">Entity neighborhood</option>
-            <option value="path">Shortest path</option>
-          </select>
-        </label>
-        <button type="button" id="graph-refresh" class="pager">Refresh analytics</button>
-      </div>
-      <div id="graph-path-tools" class="filters" hidden>
-        <label>From
-          <select id="graph-path-from"></select>
-        </label>
-        <label>To
-          <select id="graph-path-to"></select>
-        </label>
-        <button type="button" id="graph-path-run">Find path</button>
-      </div>
-      <div class="graph-layout">
+      <p id="graph-stats" class="status"></p>
+      <div class="workbench">
+        <aside class="rail">
+          <form id="graph-form" class="search-form">
+            <label class="sr-only" for="graph-q">Entity</label>
+            <input id="graph-q" placeholder="Find a name, e.g. Dulles" />
+            <button type="submit">Look up</button>
+          </form>
+          <div class="filters rail-filters">
+            <label>View
+              <select id="graph-mode">
+                <option value="overview">Overview</option>
+                <option value="neighborhood">Neighborhood</option>
+                <option value="path">Path</option>
+              </select>
+            </label>
+            <label>Relation
+              <select id="graph-relation">
+                <option value="">All relations</option>
+              </select>
+            </label>
+          </div>
+          <div id="graph-path-tools" class="filters rail-filters" hidden>
+            <label>From <select id="graph-path-from"></select></label>
+            <label>To <select id="graph-path-to"></select></label>
+            <button type="button" id="graph-path-run">Find path</button>
+          </div>
+          <div id="graph-entities" class="entity-list"></div>
+        </aside>
         <div class="graph-stage">
-          <canvas id="graph-canvas" width="900" height="520" aria-label="Interactive knowledge graph"></canvas>
-          <p class="graph-hint">Drag nodes · scroll to zoom · click a node for profile &amp; evidence · overview shows top hubs</p>
+          <canvas id="graph-canvas" width="900" height="560" aria-label="Interactive knowledge graph"></canvas>
+          <p class="graph-hint">Click a node or a line · drag to move · scroll to zoom</p>
           <div id="graph-legend" class="graph-legend"></div>
         </div>
-        <aside class="graph-side">
-          <div id="graph-entities" class="entity-list"></div>
-          <div id="graph-profile" class="evidence-panel"></div>
-          <div id="graph-detail" class="evidence-panel"></div>
+        <aside id="graph-dossier" class="dossier" aria-live="polite">
+          <p class="eyebrow">Dossier</p>
+          <h3>Select a name or a relationship</h3>
+          <p class="meta">Attributes, the supporting sentence, and links to the source documents appear here.</p>
         </aside>
       </div>
     </section>
@@ -169,10 +144,9 @@
     <section id="view-sources" class="view">
       <div class="panel-head">
         <h2>Collections</h2>
-        <p>Public declassified and historical collections. Each one is a robots-aware crawl of a reading room or document library.</p>
+        <p>Each row is one public collection. Open its holdings, then a record, then the names inside that record.</p>
       </div>
-      <div id="source-viz" class="viz-row"></div>
-      <div id="source-list" class="collection-list"></div>
+      <div id="source-list" class="table-wrap"></div>
     </section>
 
     <section id="view-reason" class="view">
@@ -207,7 +181,7 @@
     <section id="view-browse" class="view">
       <div class="panel-head">
         <h2>Holdings</h2>
-        <p>Paginated inventory of normalized documents in the lake.</p>
+        <p>Current captures in the lake. Open a row to read it, or trace a name into the graph.</p>
       </div>
       <form id="browse-form" class="row">
         <label>Collection <select id="browse-collection"><option value="cia" selected>CIA</option><option value="">All collections</option></select></label>
@@ -216,7 +190,7 @@
         <button type="submit">Browse</button>
       </form>
       <div id="browse-status" class="status" hidden></div>
-      <div id="browse-list" class="doc-list"></div>
+      <div id="browse-list" class="table-wrap"></div>
       <div class="pager">
         <button type="button" id="browse-prev" disabled>Previous</button>
         <span id="browse-page">—</span>
@@ -268,7 +242,6 @@
         <p>NATS workers handle continuous ingest. Interval jobs cover recrawl, compaction, seed refresh, and health.</p>
       </div>
       <div id="pipeline-stats" class="stat-grid"></div>
-      <div id="pipeline-chart" class="chart chart-wide" role="img" aria-label="Pipeline counters"></div>
       <div id="job-list" class="job-list"></div>
       <pre id="job-log" class="job-log" hidden></pre>
     </section>

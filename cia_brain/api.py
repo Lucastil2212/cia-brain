@@ -450,26 +450,69 @@ def get_document(sha256: str):
     return _assemble_document(_parse_sha256(sha256))
 
 
+def _reading_html(doc: dict) -> str:
+    chunks = doc.get("chunks") or []
+    if chunks:
+        raw = "\n\n".join(chunk.get("text") or "" for chunk in chunks)
+    else:
+        raw = doc.get("text") or ""
+    blocks = []
+    for para in raw.split("\n"):
+        line = " ".join(para.split())
+        if line:
+            blocks.append(line)
+    if not blocks:
+        return "<p class='meta'>No extracted text is stored for this file.</p>"
+    shown = blocks[:180]
+    html_blocks = "".join(f"<p>{html.escape(line)}</p>" for line in shown)
+    if len(blocks) > len(shown):
+        html_blocks += (
+            f"<p class='meta'>{len(blocks) - len(shown)} more lines are in the original file.</p>"
+        )
+    return html_blocks
+
+
+def _entity_sidebar(doc: dict) -> str:
+    seen: dict[str, dict] = {}
+    for ent in (doc.get("graph") or {}).get("entities") or []:
+        eid = ent.get("id") or ""
+        label = (ent.get("label") or "").strip()
+        kind = ent.get("kind") or ""
+        if not eid or kind == "date" or len(label) < 3:
+            continue
+        prev = seen.get(eid)
+        if prev is None or (ent.get("confidence") or 0) > (prev.get("confidence") or 0):
+            seen[eid] = ent
+    entities = sorted(seen.values(), key=lambda ent: -(ent.get("confidence") or 0))[:36]
+    if not entities:
+        return "<p class='meta'>No names were extracted from this record yet.</p>"
+    rows = []
+    for ent in entities:
+        eid = html.escape(ent["id"])
+        label = html.escape(ent.get("label") or "")
+        kind = html.escape((ent.get("kind") or "named entity").replace("_", " "))
+        rows.append(
+            f'<a class="entity-jump" href="/#graph/{eid}"><span>{label}</span><small>{kind}</small></a>'
+        )
+    return "".join(rows)
+
+
 def _document_page(doc: dict) -> str:
     cite = doc.get("citation") or {}
     title = html.escape(cite.get("title") or doc.get("title") or "Document")
     agency = html.escape(cite.get("agency") or "Unknown agency")
-    collection = html.escape(cite.get("collection") or doc.get("source_id") or "")
+    collection = html.escape(cite.get("collection") or doc.get("source_id") or "unspecified")
     source_url = cite.get("source_url") or doc.get("source_url") or ""
     digest = doc.get("source_sha256") or ""
-    fetched = html.escape((cite.get("fetched_at") or "")[:19])
+    fetched = html.escape((cite.get("fetched_at") or "")[:19].replace("T", " "))
+    published = html.escape((doc.get("published_at") or "")[:10])
     latest = doc.get("latest_sha256") or ""
     newer_html = ""
     if latest and latest != digest:
         newer_html = (
-            '<p class="meta">A newer capture of this URL is stored. '
+            '<p class="banner">A newer capture of this URL is stored. '
             f'<a href="/d/{html.escape(latest)}">Open the current version</a>.</p>'
         )
-    chunks = doc.get("chunks") or []
-    if chunks:
-        body = "\n\n".join(html.escape(chunk.get("text") or "") for chunk in chunks)
-    else:
-        body = html.escape(doc.get("text") or "No extracted text is stored for this file.")
     versions = []
     for row in doc.get("versions") or []:
         sha = row.get("sha256") or ""
@@ -483,45 +526,80 @@ def _document_page(doc: dict) -> str:
             label = short or "no hash"
         versions.append(
             "<li>"
-            f"{html.escape((row.get('fetched_at') or '')[:19])} · HTTP {html.escape(str(row.get('status_code') or ''))}"
+            f"{html.escape((row.get('fetched_at') or '')[:19].replace('T', ' '))} · "
+            f"HTTP {html.escape(str(row.get('status_code') or ''))}"
             f" · {html.escape(mark)} · {label}"
             "</li>"
         )
     version_html = (
-        f"<ul>{''.join(versions)}</ul>"
+        f"<ol class='timeline'>{''.join(versions)}</ol>"
         if versions
-        else "<p>No captures recorded yet.</p>"
+        else "<p class='meta'>No captures recorded yet.</p>"
     )
     diff = doc.get("text_diff") or ""
-    diff_html = f"<h2>Change from previous capture</h2><pre class=\"chunk\">{html.escape(diff)}</pre>" if diff else ""
+    diff_html = (
+        f"<h2>Change from previous capture</h2><pre class=\"chunk\">{html.escape(diff)}</pre>"
+        if diff
+        else ""
+    )
     mime = doc.get("mime") or ""
     original = ""
     if mime == "application/pdf":
-        original = f'<iframe class="media-frame" title="Original PDF" src="/v1/raw/{html.escape(digest)}?inline=1"></iframe>'
+        original = (
+            f'<iframe class="media-frame" title="Original PDF" '
+            f'src="/v1/raw/{html.escape(digest)}?inline=1"></iframe>'
+        )
     elif mime.startswith("image/"):
-        original = f'<img src="/v1/raw/{html.escape(digest)}" alt="{title}" />'
+        original = f'<img class="record-image" src="/v1/raw/{html.escape(digest)}" alt="{title}" />'
+    published_html = f" · published {published}" if published else ""
+    source_link = (
+        f'<a href="{html.escape(source_url, quote=True)}">Government source</a>'
+        if source_url
+        else ""
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title} — CIA Brain</title>
   <link rel="stylesheet" href="/assets/styles.css" />
 </head>
-<body>
-  <main class="frame">
-    <p><a href="/">Catalog</a></p>
-    <h1>{title}</h1>
-    <p class="meta">{agency} · {collection} · fetched {fetched}</p>
-    <p class="meta"><a href="{html.escape(source_url, quote=True)}">Government source</a>
-      · <a href="/v1/raw/{html.escape(digest)}">Download original</a>
-      · <code>{html.escape(digest)}</code></p>
-    {newer_html}
-    {original}
-    <h2>Captures</h2>
-    {version_html}
-    {diff_html}
-    <h2>Extracted text</h2>
-    <pre class="chunk">{body}</pre>
+<body class="record-body">
+  <header class="record-top">
+    <a class="brand" href="/#catalog">
+      <span class="brand-name">CIA Brain</span>
+    </a>
+    <nav class="record-nav" aria-label="Catalog">
+      <a href="/#catalog">Catalog</a>
+      <a href="/#holdings">Holdings</a>
+      <a href="/#graph">Knowledge graph</a>
+    </nav>
+  </header>
+  <main class="record-layout">
+    <article class="record-read">
+      <p class="eyebrow">{agency} · {collection}</p>
+      <h1>{title}</h1>
+      <p class="meta">Captured {fetched}{published_html} · {html.escape(mime or "unknown format")}</p>
+      <p class="record-actions">
+        {source_link}
+        <a href="/v1/raw/{html.escape(digest)}">Download original</a>
+      </p>
+      {newer_html}
+      {original}
+      <h2>Extracted text</h2>
+      <div class="reading">{_reading_html(doc)}</div>
+      {diff_html}
+      <h2>Captures of this URL</h2>
+      {version_html}
+    </article>
+    <aside class="dossier">
+      <p class="eyebrow">From this record</p>
+      <h2>Names to trace</h2>
+      <p class="meta">Open a name to see its relationships and the other archived documents that mention it.</p>
+      <div class="entity-jumps">{_entity_sidebar(doc)}</div>
+      <p class="meta dossier-sha"><code>{html.escape(digest)}</code></p>
+    </aside>
   </main>
 </body>
 </html>"""

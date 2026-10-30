@@ -30,6 +30,11 @@ def test_overview_and_analytics(tmp_path):
     overview = g.overview(limit=20)
     assert overview["nodes"]
     assert any(link["relation"] for link in overview["links"]) or overview["links"] == []
+    if overview["links"]:
+        sample = overview["links"][0]
+        assert sample["sha"]
+        assert "title" in sample
+        assert "evidence" in sample
 
 
 def test_shortest_path(tmp_path):
@@ -51,3 +56,8 @@ def test_entity_profile(tmp_path):
     profile = g.entity_profile(cia)
     assert profile["degree"] >= 1
     assert profile["neighbors"]
+    assert profile["documents"] >= 1
+    assert profile["mentions"] >= 1
+    assert profile["sources"]
+    assert profile["sources"][0]["sha"]
+    assert profile["sources"][0]["url"]

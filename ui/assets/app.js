@@ -9,8 +9,32 @@ const state = {
   sources: [],
   graphSim: null,
   selectedEntity: null,
+  selectedEdgeKey: "",
+  relSamples: [],
+  overviewToken: 0,
   token: localStorage.getItem("cia_brain_token") || "",
   user: null,
+};
+
+const VIEW_HASH = {
+  search: "catalog",
+  graph: "graph",
+  gallery: "images",
+  sources: "collections",
+  reason: "reading",
+  browse: "holdings",
+  account: "account",
+  pipeline: "stacks",
+};
+const HASH_VIEW = Object.fromEntries(Object.entries(VIEW_HASH).map(([view, hash]) => [hash, view]));
+
+const RELATION_LABELS = {
+  co_mentioned: "mentioned together",
+  worked_with: "worked with",
+  released_by: "released by",
+  reported_by: "reported by",
+  located_in: "located in",
+  transferred_to: "transferred to",
 };
 
 async function api(path, options = {}) {
@@ -66,9 +90,34 @@ function setStatus(el, msg, show = true) {
   el.textContent = msg;
 }
 
+function relationLabel(name) {
+  if (!name) return "mentioned together";
+  return RELATION_LABELS[name] || String(name).replaceAll("_", " ");
+}
+
+function kindLabel(kind) {
+  return String(kind || "named entity").replaceAll("_", " ");
+}
+
+function agencyName(sourceId) {
+  if (!sourceId) return "";
+  const match = (state.sources || []).find((source) => source.id === sourceId);
+  return match?.agency || sourceId;
+}
+
+function rememberLocation(name) {
+  let hash = VIEW_HASH[name] || "catalog";
+  if (name === "graph" && state.selectedEntity && $("#graph-mode")?.value === "neighborhood") {
+    hash = `graph/${state.selectedEntity}`;
+  }
+  const next = `#${hash}`;
+  if (location.hash !== next) history.replaceState(null, "", next);
+}
+
 function showView(name) {
   $$(".view").forEach((v) => v.classList.toggle("is-active", v.id === `view-${name}`));
   $$(".nav-btn").forEach((b) => b.classList.toggle("is-active", b.dataset.view === name));
+  rememberLocation(name);
   if (name === "sources") loadSources();
   if (name === "graph") loadGraph();
   if (name === "pipeline") refreshPipeline();
@@ -76,6 +125,19 @@ function showView(name) {
   if (name === "gallery") loadGallery();
   if (name === "search") loadCatalogViz();
   if (name === "account") loadAccount();
+}
+
+function applyHash() {
+  const raw = decodeURIComponent(location.hash.replace(/^#/, ""));
+  if (!raw) return;
+  if (raw.startsWith("graph/")) {
+    state.selectedEntity = raw.slice("graph/".length);
+    if ($("#graph-mode")) $("#graph-mode").value = "neighborhood";
+    showView("graph");
+    return;
+  }
+  const view = HASH_VIEW[raw];
+  if (view) showView(view);
 }
 
 function renderBarChart(el, rows, { labelKey = "label", valueKey = "value", maxBars = 8 } = {}) {
@@ -101,25 +163,23 @@ function renderBarChart(el, rows, { labelKey = "label", valueKey = "value", maxB
 
 function resultCard(r, index) {
   const title = r.title || "(untitled)";
-  const score = typeof r.score === "number" ? r.score.toFixed(4) : "—";
-  const mods = (r.modalities || []).map((m) => `<span class="modality-tag">${escapeHtml(m)}</span>`).join(" ");
-  const agency = r.citation?.agency || r.agency;
+  const agency = r.citation?.agency || r.agency || "";
+  const when = (r.fetched_at || "").slice(0, 10);
+  const sha = r.source_sha256 || "";
+  const kicker = [agency, r.mime || "unknown format", when, r.current === false ? "earlier capture" : ""]
+    .filter(Boolean)
+    .map((part) => escapeHtml(part))
+    .join(" · ");
   return `
-    <article class="result" style="animation-delay:${index * 40}ms">
-      <h3>${escapeHtml(title)}</h3>
-      <div class="meta">
-        <span class="score">RRF ${score}</span>
-        ${agency ? `<span>${escapeHtml(agency)}</span>` : ""}
-        <span>${escapeHtml(r.mime || "unknown")}</span>
-        <span>chunk ${r.chunk_no ?? 0}</span>
-        <span>${escapeHtml((r.fetched_at || "").slice(0, 10))}</span>
-        ${r.current === false ? `<span>earlier capture</span>` : ""}
-        ${mods}
-        <a href="${safeHref(r.source_url)}" target="_blank" rel="noopener">source</a>
-        <a href="/v1/raw/${escapeHtml(r.source_sha256)}" target="_blank" rel="noopener">raw</a>
-        <button type="button" data-sha="${escapeHtml(r.source_sha256)}" class="linkish open-doc">open record</button>
+    <article class="record" style="animation-delay:${index * 30}ms">
+      <p class="record-kicker">${kicker}</p>
+      <h3><a href="/d/${escapeHtml(sha)}">${escapeHtml(title)}</a></h3>
+      <p class="excerpt">${escapeHtml(r.text || "")}</p>
+      <div class="record-actions">
+        <a href="/d/${escapeHtml(sha)}">Open record</a>
+        <button type="button" class="linkish analyze-doc" data-sha="${escapeHtml(sha)}">Trace names</button>
+        <a href="${safeHref(r.source_url)}" target="_blank" rel="noopener">Government source</a>
       </div>
-      <p class="excerpt">${escapeHtml(r.text)}</p>
     </article>
   `;
 }
@@ -154,18 +214,18 @@ async function loadFacets() {
 async function loadCatalogViz() {
   const row = $("#catalog-viz");
   try {
-    const [facets, sources] = await Promise.all([api("/v1/facets"), api("/v1/sources")]);
+    const sources = await api("/v1/sources");
     state.sources = sources.sources || [];
-    row.hidden = false;
-    renderBarChart(
-      $("#mime-chart"),
-      (facets.mime || []).map((m) => ({ label: m.value, value: m.count })),
-    );
-    renderBarChart(
-      $("#modality-chart"),
-      (facets.collections || []).map((row) => ({ label: row.value, value: row.count })),
-    );
     fillCollectionSelects(state.sources);
+    row.hidden = !state.sources.length;
+    row.innerHTML = state.sources
+      .map(
+        (source) => `<button type="button" class="shelf-chip" data-collection="${escapeHtml(source.id)}">
+          <span>${escapeHtml(source.agency)}</span>
+          <small>${fmtNum(source.document_count || 0)}</small>
+        </button>`,
+      )
+      .join("");
   } catch {
     row.hidden = true;
   }
@@ -258,6 +318,7 @@ function createForceGraph(canvas) {
   let panning = false;
   let panLast = null;
   let onSelect = null;
+  let onEdgeSelect = null;
   let cssW = 640;
   let cssH = 360;
   let alpha = 1;
@@ -341,8 +402,9 @@ function createForceGraph(canvas) {
     panY = panY * 0.7 + nextPanY * 0.3;
   }
 
-  function setData(payload, selectCb, { preserve = true } = {}) {
+  function setData(payload, selectCb, { preserve = true, onEdge = null } = {}) {
     onSelect = selectCb;
+    onEdgeSelect = onEdge;
     const { w, h } = resize();
     const incoming = payload.nodes || [];
     const seeds = seedPositions(incoming.length, w, h);
@@ -368,6 +430,16 @@ function createForceGraph(canvas) {
         target: map.get(e.target),
         relation: e.relation || "co_mentioned",
         weight: e.weight || 1,
+        evidence: e.evidence || "",
+        sha: e.sha || "",
+        title: e.title || "",
+        url: e.url || "",
+        fetched_at: e.fetched_at || "",
+        source_id: e.source_id || "",
+        subject_label: e.subject_label || map.get(e.source)?.label || "",
+        object_label: e.object_label || map.get(e.target)?.label || "",
+        subject_kind: e.subject_kind || map.get(e.source)?.kind || "",
+        object_kind: e.object_kind || map.get(e.target)?.kind || "",
       }));
     nodes = [...map.values()];
     for (const n of nodes) positions.set(n.id, { x: n.x, y: n.y });
@@ -542,15 +614,16 @@ function createForceGraph(canvas) {
     for (const link of links) {
       const typed = link.relation && link.relation !== "co_mentioned";
       const hot = !focusId || link.source.id === focusId || link.target.id === focusId;
+      const selected = state.selectedEdgeKey && edgeKey(link) === state.selectedEdgeKey;
       ctx.beginPath();
-      ctx.strokeStyle = typed
+      ctx.strokeStyle = selected ? "#8b6914" : typed
         ? hot
           ? "rgba(13,92,77,0.62)"
           : "rgba(13,92,77,0.14)"
         : hot
           ? "rgba(26,46,40,0.32)"
           : "rgba(26,46,40,0.1)";
-      ctx.lineWidth = Math.min(3.2, 0.85 + Math.log2(1 + (link.weight || 1)) * 0.55) / scale;
+      ctx.lineWidth = (selected ? 2.6 : Math.min(3.2, 0.85 + Math.log2(1 + (link.weight || 1)) * 0.55)) / scale;
       ctx.moveTo(link.source.x, link.source.y);
       ctx.lineTo(link.target.x, link.target.y);
       ctx.stroke();
@@ -619,6 +692,29 @@ function createForceGraph(canvas) {
     return best;
   }
 
+  function pointSegDist(p, a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  }
+
+  function hitEdge(ev) {
+    const p = toWorld(ev);
+    const limit = 12 / scale;
+    let best = null;
+    let bestDist = limit;
+    for (const link of links) {
+      const dist = pointSegDist(p, link.source, link.target);
+      if (dist < bestDist) {
+        best = link;
+        bestDist = dist;
+      }
+    }
+    return best;
+  }
+
   canvas.addEventListener("pointerdown", (ev) => {
     const n = hit(ev);
     if (n) {
@@ -626,8 +722,15 @@ function createForceGraph(canvas) {
       alpha = Math.max(alpha, 0.25);
       canvas.setPointerCapture(ev.pointerId);
       state.selectedEntity = n.id;
+      state.selectedEdgeKey = "";
       if (onSelect) onSelect(n.id, { fromCanvas: true });
     } else {
+      const edge = hitEdge(ev);
+      if (edge && onEdgeSelect) {
+        state.selectedEdgeKey = edgeKey(edge);
+        onEdgeSelect(edge);
+        return;
+      }
       panning = true;
       panLast = { x: ev.clientX, y: ev.clientY };
       canvas.setPointerCapture(ev.pointerId);
@@ -647,8 +750,9 @@ function createForceGraph(canvas) {
       panLast = { x: ev.clientX, y: ev.clientY };
     } else {
       const next = hit(ev);
+      const edge = next ? null : hitEdge(ev);
       if (next !== hover) hover = next;
-      canvas.style.cursor = hover ? "pointer" : "grab";
+      canvas.style.cursor = next || edge ? "pointer" : "grab";
     }
   });
   canvas.addEventListener("pointerup", () => {
@@ -686,6 +790,9 @@ function createForceGraph(canvas) {
       state.selectedEntity = id;
       alpha = Math.max(alpha, 0.08);
     },
+    highlightEdge(link) {
+      state.selectedEdgeKey = link ? edgeKey(link) : "";
+    },
     destroy() {
       cancelAnimationFrame(raf);
       running = false;
@@ -715,37 +822,164 @@ function fillEntitySelect(sel, entities, selected) {
     .join("");
 }
 
-function renderProfile(profile) {
-  const box = $("#graph-profile");
-  if (!box) return;
+function edgeKey(link) {
+  const source = link.source?.id || link.subject || link.source || "";
+  const target = link.target?.id || link.object || link.target || "";
+  return `${source}|${target}|${link.relation || ""}|${link.sha || ""}`;
+}
+
+function setDossier(html) {
+  const box = $("#graph-dossier");
+  if (box) box.innerHTML = html;
+}
+
+function attrGrid(pairs) {
+  return `<dl class="attrs">${pairs
+    .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`)
+    .join("")}</dl>`;
+}
+
+function sourceCard(src) {
+  const sha = src?.sha || "";
+  if (!sha) return `<p class="meta">No archived document is attached.</p>`;
+  const title = src.title || sha.slice(0, 12);
+  const when = (src.fetched_at || "").slice(0, 10);
+  const collection = agencyName(src.source_id);
+  const url = src.url || "";
+  return `<article class="source-card">
+    <h4><a href="/d/${escapeHtml(sha)}">${escapeHtml(title)}</a></h4>
+    <p class="meta">${[collection, when].filter(Boolean).map((part) => escapeHtml(part)).join(" · ")}</p>
+    <div class="record-actions">
+      <a href="/d/${escapeHtml(sha)}">Open record</a>
+      ${url ? `<a href="${safeHref(url)}" target="_blank" rel="noopener">Government source</a>` : ""}
+      <button type="button" class="linkish" data-correlate="${escapeHtml(sha)}">Related records</button>
+    </div>
+  </article>`;
+}
+
+function relationshipFromLink(link) {
+  return {
+    subject: link.source?.id || link.subject || link.source || "",
+    object: link.target?.id || link.object || link.target || "",
+    subject_label: link.subject_label || link.source?.label || "Unknown",
+    object_label: link.object_label || link.target?.label || "Unknown",
+    subject_kind: link.subject_kind || link.source?.kind || "",
+    object_kind: link.object_kind || link.target?.kind || "",
+    relation: link.relation || "co_mentioned",
+    weight: link.weight || 1,
+    evidence: link.evidence || "",
+    sha: link.sha || "",
+    title: link.title || "",
+    url: link.url || "",
+    fetched_at: link.fetched_at || "",
+    source_id: link.source_id || "",
+  };
+}
+
+function groupEdges(edges, focusId) {
+  const groups = new Map();
+  for (const edge of edges || []) {
+    const focusIsSubject = edge.subject === focusId;
+    const otherId = focusIsSubject ? edge.object : edge.subject;
+    const key = `${otherId}|${edge.relation || "co_mentioned"}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        otherId,
+        otherLabel: focusIsSubject ? edge.object_label : edge.subject_label,
+        otherKind: focusIsSubject ? edge.object_kind : edge.subject_kind,
+        relation: edge.relation || "co_mentioned",
+        count: 0,
+        sample: edge,
+      };
+      groups.set(key, group);
+    }
+    group.count += 1;
+  }
+  return [...groups.values()].sort((a, b) => b.count - a.count);
+}
+
+function neighborhoodLinks(edges) {
+  const groups = new Map();
+  for (const edge of edges || []) {
+    const key = `${edge.subject}|${edge.object}|${edge.relation || ""}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { ...edge, source: edge.subject, target: edge.object, weight: 0 };
+      groups.set(key, group);
+    }
+    group.weight += 1;
+  }
+  return [...groups.values()].sort((a, b) => b.weight - a.weight).slice(0, 80);
+}
+
+function renderEntityDossier(data) {
+  const profile = data?.profile;
   if (!profile) {
-    box.innerHTML = "";
+    setDossier(`<p class="meta">This name is not in the graph.</p>`);
     return;
   }
-  const relMax = Math.max(...(profile.relations || []).map((x) => x.count), 1);
-  box.innerHTML = `
-    <h3 style="margin:0;font-family:var(--font-display)">${escapeHtml(profile.label)}</h3>
-    <p class="meta">${escapeHtml(profile.kind)} · degree ${fmtNum(profile.degree)}</p>
-    <div class="profile-grid">
-      <div class="profile-stat"><div class="label">Degree</div><div class="value">${fmtNum(profile.degree)}</div></div>
-      <div class="profile-stat"><div class="label">Neighbors</div><div class="value">${fmtNum((profile.neighbors || []).length)}</div></div>
+  const groups = groupEdges(data.edges || [], profile.id);
+  state.relSamples = groups.map((group) => ({ ...group.sample, weight: group.count }));
+  const confidence =
+    profile.confidence == null ? "not scored" : Number(profile.confidence).toFixed(2);
+  const relations = (profile.relations || [])
+    .slice(0, 4)
+    .map((row) => `${relationLabel(row.relation)} ${fmtNum(row.count)}`)
+    .join(" · ");
+  setDossier(`
+    <p class="eyebrow">${escapeHtml(kindLabel(profile.kind))}</p>
+    <h3>${escapeHtml(profile.label)}</h3>
+    <p class="meta">Inferred from archived sentences. Open a source to read the passage.</p>
+    ${attrGrid([
+      ["Kind", kindLabel(profile.kind)],
+      ["Links", fmtNum(profile.degree)],
+      ["Documents", fmtNum(profile.documents)],
+      ["Mentions", fmtNum(profile.mentions)],
+      ["Confidence", confidence],
+      ["Relations", relations || "none yet"],
+    ])}
+    <h4>Source documents</h4>
+    ${(profile.sources || []).map(sourceCard).join("") || `<p class="meta">No active document mentions this name.</p>`}
+    <h4>Relationships</h4>
+    ${
+      groups
+        .slice(0, 12)
+        .map(
+          (group, index) => `<button type="button" class="rel-row" data-rel="${index}">
+            <span>${escapeHtml(relationLabel(group.relation))} ${escapeHtml(group.otherLabel || "Unknown")}</span>
+            <small>${escapeHtml(kindLabel(group.otherKind))} · ${fmtNum(group.count)}</small>
+          </button>`,
+        )
+        .join("") || `<p class="meta">No sentence-level relationships yet.</p>`
+    }
+  `);
+}
+
+function showRelationship(link) {
+  const edge = relationshipFromLink(link);
+  state.overviewToken += 1;
+  state.selectedEdgeKey = edgeKey(edge);
+  if (state.graphSim) state.graphSim.highlightEdge(edge);
+  setDossier(`
+    <p class="eyebrow">Relationship</p>
+    <h3>${escapeHtml(edge.subject_label)} <em>${escapeHtml(relationLabel(edge.relation))}</em> ${escapeHtml(edge.object_label)}</h3>
+    <p class="meta">A candidate inferred from one sentence. It is not an established fact.</p>
+    ${attrGrid([
+      ["Type", relationLabel(edge.relation)],
+      ["Evidence count", fmtNum(edge.weight)],
+      ["From", `${edge.subject_label} (${kindLabel(edge.subject_kind)})`],
+      ["To", `${edge.object_label} (${kindLabel(edge.object_kind)})`],
+    ])}
+    <h4>Supporting sentence</h4>
+    <blockquote>${escapeHtml(edge.evidence || "No sentence was stored for this link.")}</blockquote>
+    <h4>Source document</h4>
+    ${sourceCard(edge)}
+    <div class="record-actions">
+      <button type="button" class="linkish" data-entity="${escapeHtml(edge.subject)}">Open ${escapeHtml(edge.subject_label)}</button>
+      <button type="button" class="linkish" data-entity="${escapeHtml(edge.object)}">Open ${escapeHtml(edge.object_label)}</button>
     </div>
-    <div class="chart">${(profile.relations || [])
-      .slice(0, 6)
-      .map((r) => {
-        const pct = Math.max(4, Math.round((r.count / relMax) * 100));
-        return `<div class="chart-bar-row"><span class="chart-bar-label">${escapeHtml(r.relation)}</span><div class="chart-bar-track"><div class="chart-bar-fill" style="width:${pct}%"></div></div><span class="chart-bar-value">${fmtNum(r.count)}</span></div>`;
-      })
-      .join("")}</div>
-    <p class="meta" style="margin-top:0.75rem">Top neighbors</p>
-    ${(profile.neighbors || [])
-      .slice(0, 8)
-      .map(
-        (n) =>
-          `<button type="button" class="entity-chip" data-entity="${escapeHtml(n.id)}" data-kind="${escapeHtml(n.kind)}"><span>${escapeHtml(n.label)}</span><small>${escapeHtml(n.relation)} · w${n.weight}</small></button>`,
-      )
-      .join("")}
-  `;
+  `);
 }
 
 async function showOverview() {
@@ -754,49 +988,42 @@ async function showOverview() {
     `/v1/graph/overview?limit=40${relation ? `&relation=${encodeURIComponent(relation)}` : ""}`,
   );
   if (!state.graphSim) state.graphSim = createForceGraph($("#graph-canvas"));
-  const allLinks = (data.links || []).map((l) => ({
-    source: l.source,
-    target: l.target,
-    relation: l.relation,
-    weight: l.weight,
-  }));
-  // Cap dense overview edges so the canvas stays readable; keep strongest co-evidence first.
-  const maxLinks = Math.min(120, allLinks.length);
-  const links = [...allLinks].sort((a, b) => (b.weight || 1) - (a.weight || 1)).slice(0, maxLinks);
+  const allLinks = data.links || [];
+  const links = [...allLinks].sort((a, b) => (b.weight || 1) - (a.weight || 1)).slice(0, 120);
+  state.selectedEdgeKey = "";
   state.graphSim.setData(
-    {
-      nodes: data.nodes || [],
-      links,
-    },
+    { nodes: data.nodes || [], links },
     (id) => selectEntity(id, { mode: "neighborhood" }),
-    { preserve: false },
+    { preserve: false, onEdge: showRelationship },
   );
-  $("#graph-detail").innerHTML = `<p class="status">${fmtNum((data.nodes || []).length)} hubs · ${fmtNum(links.length)} of ${fmtNum(allLinks.length)} weighted links · ${escapeHtml(data.method || "")}</p>`;
-  if ((data.nodes || []).length && !state.selectedEntity) {
-    state.selectedEntity = data.nodes[0].id;
+  const focus = state.selectedEntity || data.nodes?.[0]?.id;
+  if (!focus) {
+    setDossier(`<p class="meta">The graph has no names yet. Ingest documents or run graph_rebuild.</p>`);
+    return;
   }
-  if (state.selectedEntity) {
-    try {
-      const nb = await api(`/v1/graph/entities/${state.selectedEntity}`);
-      renderProfile(nb.profile);
-    } catch {
-      /* overview without profile is fine */
-    }
+  state.selectedEntity = focus;
+  state.graphSim.highlight(focus);
+  const token = ++state.overviewToken;
+  try {
+    const dossier = await api(`/v1/graph/entities/${focus}`);
+    if (token !== state.overviewToken || state.selectedEdgeKey) return;
+    renderEntityDossier(dossier);
+  } catch {
+    if (token === state.overviewToken) setDossier(`<p class="meta">Click a name or a line to see its sources.</p>`);
   }
 }
 
 async function selectEntity(entityId, opts = {}) {
+  state.overviewToken += 1;
   state.selectedEntity = entityId;
+  state.selectedEdgeKey = "";
   if (opts.mode && $("#graph-mode")) $("#graph-mode").value = opts.mode;
   $$(".entity-chip").forEach((el) => el.classList.toggle("is-active", el.dataset.entity === entityId));
   if (state.graphSim) state.graphSim.highlight(entityId);
-  const detail = $("#graph-detail");
-  detail.innerHTML = `<p class="status">Loading neighborhood…</p>`;
+  setDossier(`<p class="meta">Loading this name…</p>`);
   try {
     const data = await api(`/v1/graph/entities/${entityId}`);
-    renderProfile(data.profile);
     const nodes = new Map();
-    const links = [];
     if (data.profile) {
       nodes.set(entityId, {
         id: entityId,
@@ -806,36 +1033,24 @@ async function selectEntity(entityId, opts = {}) {
       });
     }
     for (const edge of data.edges || []) {
-      nodes.set(edge.subject, {
-        id: edge.subject,
-        label: edge.subject_label,
-        kind: nodes.get(edge.subject)?.kind || "named_entity",
-      });
-      nodes.set(edge.object, {
-        id: edge.object,
-        label: edge.object_label,
-        kind: nodes.get(edge.object)?.kind || "named_entity",
-      });
-      links.push({
-        source: edge.subject,
-        target: edge.object,
-        relation: edge.relation,
-        weight: 1,
-      });
-    }
-    for (const n of data.profile?.neighbors || []) {
-      if (nodes.has(n.id)) nodes.get(n.id).kind = n.kind;
-      else nodes.set(n.id, { id: n.id, label: n.label, kind: n.kind, degree: n.weight });
-    }
-    for (const chip of $$("#graph-entities .entity-chip, #graph-profile .entity-chip")) {
-      const id = chip.dataset.entity;
-      if (nodes.has(id)) {
-        nodes.set(id, {
-          ...nodes.get(id),
-          label: chip.querySelector("span")?.textContent || nodes.get(id).label,
-          kind: chip.dataset.kind || nodes.get(id).kind,
+      if (!nodes.has(edge.subject)) {
+        nodes.set(edge.subject, {
+          id: edge.subject,
+          label: edge.subject_label,
+          kind: edge.subject_kind || "named_entity",
         });
       }
+      if (!nodes.has(edge.object)) {
+        nodes.set(edge.object, {
+          id: edge.object,
+          label: edge.object_label,
+          kind: edge.object_kind || "named_entity",
+        });
+      }
+    }
+    for (const neighbor of data.profile?.neighbors || []) {
+      if (nodes.has(neighbor.id)) nodes.get(neighbor.id).kind = neighbor.kind;
+      else nodes.set(neighbor.id, { id: neighbor.id, label: neighbor.label, kind: neighbor.kind, degree: neighbor.weight });
     }
     if (!nodes.size) {
       nodes.set(entityId, {
@@ -845,31 +1060,15 @@ async function selectEntity(entityId, opts = {}) {
       });
     }
     if (!state.graphSim) state.graphSim = createForceGraph($("#graph-canvas"));
-    state.graphSim.setData({ nodes: [...nodes.values()], links }, (id) => selectEntity(id), {
-      preserve: Boolean(opts.fromCanvas),
-    });
-
-    detail.innerHTML =
-      (data.edges || [])
-        .slice(0, 40)
-        .map(
-          (x) => `<article class="result">
-          <h3>${escapeHtml(x.subject_label)} · ${escapeHtml(x.relation || "co_mentioned")} · ${escapeHtml(x.object_label)}</h3>
-          <blockquote>${escapeHtml(x.evidence)}</blockquote>
-          <p class="meta">${escapeHtml(x.title || "")} · ${escapeHtml(x.url || "")}</p>
-          <p>
-            <a href="/v1/raw/${escapeHtml(x.sha)}" target="_blank" rel="noopener">Archived source</a>
-            <button type="button" class="linkish" data-correlate="${escapeHtml(x.sha)}">Related</button>
-            <button type="button" class="linkish" data-spatial="${escapeHtml(x.sha)}">Nearby</button>
-            <button type="button" class="linkish open-doc" data-sha="${escapeHtml(x.sha)}">Open record</button>
-          </p>
-        </article>`,
-        )
-        .join("") ||
-      `<p>${(data.mentions || []).length} mentions; no sentence-level connections yet.</p>`;
-    bindDocButtons(detail);
+    state.graphSim.setData(
+      { nodes: [...nodes.values()], links: neighborhoodLinks(data.edges) },
+      (id) => selectEntity(id, { mode: "neighborhood" }),
+      { preserve: Boolean(opts.fromCanvas), onEdge: showRelationship },
+    );
+    renderEntityDossier(data);
+    rememberLocation("graph");
   } catch (err) {
-    detail.textContent = err.message;
+    setDossier(`<p class="meta">${escapeHtml(err.message)}</p>`);
   }
 }
 
@@ -877,68 +1076,53 @@ async function runPathFind() {
   const source = $("#graph-path-from").value;
   const target = $("#graph-path-to").value;
   if (!source || !target) return;
-  const detail = $("#graph-detail");
-  detail.innerHTML = `<p class="status">Searching path…</p>`;
+  setDossier(`<p class="meta">Searching for a path…</p>`);
   try {
     const data = await api(
       `/v1/graph/path?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}&max_depth=6`,
     );
     if (!data.path?.length) {
-      detail.innerHTML = `<p class="status">${escapeHtml(data.note || "No path found")}</p>`;
+      setDossier(`<p class="meta">${escapeHtml(data.note || "No path found")}</p>`);
       return;
     }
     if (!state.graphSim) state.graphSim = createForceGraph($("#graph-canvas"));
+    const links = (data.edges || []).map((edge) => ({
+      ...edge,
+      source: edge.subject,
+      target: edge.object,
+      weight: 2,
+    }));
+    state.selectedEdgeKey = "";
     state.graphSim.setData(
-      {
-        nodes: data.nodes || [],
-        links: (data.edges || []).map((e) => ({
-          source: e.subject,
-          target: e.object,
-          relation: e.relation,
-          weight: 2,
-        })),
-      },
-      (id) => selectEntity(id),
-      { preserve: false },
+      { nodes: data.nodes || [], links },
+      (id) => selectEntity(id, { mode: "neighborhood" }),
+      { preserve: false, onEdge: showRelationship },
     );
     state.selectedEntity = target;
-    detail.innerHTML = `<p class="status">${data.hops} hop${data.hops === 1 ? "" : "s"} · inferred path</p>${(data.edges || [])
-      .map(
-        (e, i) => `<div class="path-hop"><strong>${i + 1}.</strong> ${escapeHtml(e.subject_label)}
-        — <em>${escapeHtml(e.relation)}</em> → ${escapeHtml(e.object_label)}
-        <blockquote>${escapeHtml(e.evidence)}</blockquote>
-        <button type="button" class="linkish open-doc" data-sha="${escapeHtml(e.sha)}">Open record</button>
-      </div>`,
-      )
-      .join("")}`;
-    bindDocButtons(detail);
-    try {
-      const nb = await api(`/v1/graph/entities/${target}`);
-      renderProfile(nb.profile);
-    } catch {
-      /* ignore */
-    }
+    state.relSamples = data.edges || [];
+    const hops = data.hops || links.length;
+    setDossier(`
+      <p class="eyebrow">Path</p>
+      <h3>${hops} hop${hops === 1 ? "" : "s"}</h3>
+      <p class="meta">Each hop is one inferred sentence. Open it to read the source.</p>
+      ${(data.edges || [])
+        .map(
+          (edge, index) => `<button type="button" class="rel-row" data-rel="${index}">
+            <span>${index + 1}. ${escapeHtml(edge.subject_label)} ${escapeHtml(relationLabel(edge.relation))} ${escapeHtml(edge.object_label)}</span>
+            <small>${escapeHtml((edge.title || "source").slice(0, 42))}</small>
+          </button>`,
+        )
+        .join("")}
+    `);
   } catch (err) {
-    detail.textContent = err.message;
+    setDossier(`<p class="meta">${escapeHtml(err.message)}</p>`);
   }
 }
 
 async function loadGraphAnalytics() {
   const analytics = await api("/v1/graph/analytics?hub_limit=12");
   $("#graph-stats").textContent =
-    `${fmtNum(analytics.documents)} documents · ${fmtNum(analytics.entities)} entities · ${fmtNum(analytics.edges)} links · ${fmtNum(analytics.typed_edges || 0)} typed · NER ${analytics.ner_backend || "rules"}`;
-  renderBarChart(
-    $("#graph-relation-chart"),
-    (analytics.relations || []).map((r) => ({ label: r.relation, value: r.count })),
-  );
-  renderBarChart(
-    $("#graph-kind-chart"),
-    (analytics.kinds || []).map((k) => ({ label: k.kind, value: k.count })),
-  );
-  renderBarChart(
-    $("#graph-hub-chart"),
-    (analytics.hubs || []).map((h) => ({ label: h.label, value: h.degree })),
-  );
+    `${fmtNum(analytics.documents)} records in the graph · ${fmtNum(analytics.entities)} names · ${fmtNum(analytics.edges)} links · ${fmtNum(analytics.typed_edges || 0)} typed`;
   const relSel = $("#graph-relation");
   if (relSel) {
     const current = relSel.value;
@@ -947,7 +1131,7 @@ async function loadGraphAnalytics() {
       (analytics.relations || [])
         .map(
           (r) =>
-            `<option value="${escapeHtml(r.relation)}">${escapeHtml(r.relation)} (${r.count})</option>`,
+            `<option value="${escapeHtml(r.relation)}">${escapeHtml(relationLabel(r.relation))} (${fmtNum(r.count)})</option>`,
         )
         .join("");
     if ([...relSel.options].some((o) => o.value === current)) relSel.value = current;
@@ -985,7 +1169,7 @@ async function loadGraph() {
         .map(
           (e) => `<button type="button" class="entity-chip" data-entity="${escapeHtml(e.id)}" data-kind="${escapeHtml(e.kind)}">
             <span>${escapeHtml(e.label)}</span>
-            <small>${escapeHtml(e.kind)} · ${e.documents ?? e.degree ?? 0}</small>
+            <small>${escapeHtml(kindLabel(e.kind))} · ${fmtNum(e.documents ?? e.degree ?? 0)}</small>
           </button>`,
         )
         .join("") ||
@@ -997,24 +1181,25 @@ async function loadGraph() {
     if (!state.graphSim) state.graphSim = createForceGraph($("#graph-canvas"));
 
     if (mode === "path") {
-      $("#graph-detail").innerHTML = `<p class="status">Choose two entities and run Find path.</p>`;
       if (entities.length >= 2) await runPathFind();
+      else setDossier(`<p class="meta">Choose two names, then find the path between them.</p>`);
+      rememberLocation("graph");
       return;
     }
-    if (mode === "neighborhood" || q) {
-      const focus =
-        state.selectedEntity && entities.some((e) => e.id === state.selectedEntity)
-          ? state.selectedEntity
-          : entities[0]?.id;
+    if (q) {
+      const focus = entities[0]?.id;
+      if (focus) await selectEntity(focus, { mode: "neighborhood" });
+      else setDossier(`<p class="meta">No names match that search.</p>`);
+      return;
+    }
+    if (mode === "neighborhood") {
+      const focus = state.selectedEntity || entities[0]?.id;
       if (focus) await selectEntity(focus);
-      else {
-        state.graphSim.setData({ nodes: [], links: [] });
-        $("#graph-detail").innerHTML = "";
-        renderProfile(null);
-      }
+      else setDossier(`<p class="meta">No names in the graph yet.</p>`);
       return;
     }
     await showOverview();
+    rememberLocation("graph");
   } catch (err) {
     $("#graph-stats").textContent = err.message;
   }
@@ -1024,34 +1209,23 @@ async function loadSources() {
   try {
     const data = await api("/v1/sources");
     state.sources = data.sources || [];
-    const enabled = state.sources.filter((s) => s.enabled);
-    const byKind = {};
-    for (const s of enabled) byKind[s.kind] = (byKind[s.kind] || 0) + 1;
-    $("#source-viz").innerHTML = `<figure class="viz-panel"><figcaption>Enabled sources by kind</figcaption><div id="source-kind-chart" class="chart"></div></figure>
-      <figure class="viz-panel"><figcaption>Agencies represented</figcaption><div id="source-agency-chart" class="chart"></div></figure>`;
-    renderBarChart(
-      $("#source-kind-chart"),
-      Object.entries(byKind).map(([label, value]) => ({ label, value })),
-    );
-    const agencies = {};
-    for (const s of enabled) agencies[s.agency] = (agencies[s.agency] || 0) + 1;
-    renderBarChart(
-      $("#source-agency-chart"),
-      Object.entries(agencies).map(([label, value]) => ({ label, value })),
-    );
-
-    $("#source-list").innerHTML = state.sources
-      .map(
-        (s) => `<article class="collection">
-        <h3>${escapeHtml(s.agency)} · <span class="modality-tag">${escapeHtml(s.id)}</span></h3>
-        <p class="meta">${escapeHtml((s.modalities || []).join(" · "))} · ${s.enabled ? "on shelf" : "not selected"} · ${
-          s.interval ? `polls every ${s.interval}s` : "robots-aware archive crawl"
-        }</p>
-        <p><a href="${safeHref(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a></p>
-        <p class="meta">${fmtNum(s.document_count || 0)} documents · ${escapeHtml(collectionStatus(s))}</p>
-      </article>`,
-      )
-      .join("");
+    fillCollectionSelects(state.sources);
+    $("#source-list").innerHTML = `<table class="sheet">
+      <thead><tr><th>Collection</th><th>Documents</th><th>Crawl</th><th></th></tr></thead>
+      <tbody>${state.sources
+        .map(
+          (source) => `<tr>
+            <td>
+              <strong>${escapeHtml(source.agency)}</strong>
+              <div class="meta"><a href="${safeHref(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.url || "")}</a></div>
+            </td>
+            <td>${fmtNum(source.document_count || 0)}</td>
+            <td>${escapeHtml(collectionStatus(source))}${source.enabled ? "" : " · not selected"}</td>
+            <td><button type="button" class="pager" data-open-collection="${escapeHtml(source.id)}">Browse</button></td>
+          </tr>`,
+        )
+        .join("")}</tbody>
+    </table>`;
   } catch (err) {
     $("#source-list").textContent = err.message;
   }
@@ -1157,6 +1331,28 @@ function authLogout() {
   loadAccount();
 }
 
+async function traceDocument(sha, statusEl) {
+  setStatus(statusEl, "Finding names in this record…");
+  try {
+    const doc = await api(`/v1/graph/documents/${sha}`);
+    const entities = (doc.entities || []).filter(
+      (entity) => entity.kind !== "date" && (entity.label || "").trim().length >= 3,
+    );
+    if (!entities.length) {
+      setStatus(statusEl, "No names were extracted from this record yet.");
+      return;
+    }
+    entities.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+    state.selectedEntity = entities[0].id;
+    if ($("#graph-mode")) $("#graph-mode").value = "neighborhood";
+    const next = `#graph/${entities[0].id}`;
+    if (location.hash === next) showView("graph");
+    else location.hash = next;
+  } catch (err) {
+    setStatus(statusEl, err.message);
+  }
+}
+
 async function mintKey() {
   try {
     const data = await api("/v1/auth/keys", {
@@ -1259,16 +1455,22 @@ async function loadBrowse() {
     $("#browse-page").textContent = `Page ${page} / ${pages} · ${fmtNum(data.total)} docs`;
     $("#browse-prev").disabled = state.browseOffset <= 0;
     $("#browse-next").disabled = state.browseOffset + state.browseLimit >= data.total;
-    $("#browse-list").innerHTML = (data.documents || [])
-      .map(
-        (d) => `
-      <button type="button" class="doc-row" data-sha="${escapeHtml(d.source_sha256)}">
-        <strong>${escapeHtml(d.title || d.source_url || d.source_sha256)}</strong>
-        <span class="meta">${d.current === false ? "earlier capture · " : ""}${d.agency ? `${escapeHtml(d.agency)} · ` : ""}${escapeHtml(d.mime || "")} · ${fmtNum(d.text_chars)} chars · ${(d.fetched_at || "").slice(0, 10)}</span>
-      </button>`,
-      )
-      .join("");
-    $$(".doc-row").forEach((row) => row.addEventListener("click", () => openDocument(row.dataset.sha)));
+    $("#browse-list").innerHTML = `<table class="sheet">
+      <thead><tr><th>Title</th><th>Collection</th><th>Format</th><th>Captured</th><th></th></tr></thead>
+      <tbody>${(data.documents || [])
+        .map((doc) => {
+          const sha = doc.source_sha256 || "";
+          const title = doc.title || doc.source_url || sha.slice(0, 12);
+          return `<tr>
+            <td><a href="/d/${escapeHtml(sha)}">${escapeHtml(title)}</a>${doc.current === false ? `<div class="meta">earlier capture</div>` : ""}</td>
+            <td>${escapeHtml(doc.agency || agencyName(doc.source_id) || "—")}</td>
+            <td>${escapeHtml(doc.mime || "—")}</td>
+            <td>${escapeHtml((doc.fetched_at || "").slice(0, 10))}</td>
+            <td><button type="button" class="linkish analyze-doc" data-sha="${escapeHtml(sha)}">Trace names</button></td>
+          </tr>`;
+        })
+        .join("")}</tbody>
+    </table>`;
     setStatus(status, "", false);
   } catch (err) {
     setStatus(status, err.message);
@@ -1303,10 +1505,6 @@ async function refreshPipeline() {
     <div class="stat"><div class="label">${label}</div><div class="value">${fmtNum(value)}</div></div>`,
     )
     .join("");
-  renderBarChart(
-    $("#pipeline-chart"),
-    cards.map(([label, value]) => ({ label, value })),
-  );
 
   $("#job-list").innerHTML = (jobs.jobs || [])
     .map(
@@ -1382,51 +1580,63 @@ function wire() {
     const button = e.target.closest("[data-entity]");
     if (button) selectEntity(button.dataset.entity, { mode: "neighborhood" });
   });
-  $("#graph-profile")?.addEventListener("click", (e) => {
-    const button = e.target.closest("[data-entity]");
-    if (button) selectEntity(button.dataset.entity, { mode: "neighborhood" });
+  $("#graph-dossier")?.addEventListener("click", async (e) => {
+    const entityBtn = e.target.closest("[data-entity]");
+    if (entityBtn) {
+      selectEntity(entityBtn.dataset.entity, { mode: "neighborhood" });
+      return;
+    }
+    const relBtn = e.target.closest("[data-rel]");
+    if (relBtn) {
+      const sample = state.relSamples[Number(relBtn.dataset.rel)];
+      if (sample) showRelationship(sample);
+      return;
+    }
+    const correlate = e.target.closest("[data-correlate]");
+    if (!correlate) return;
+    const sha = correlate.dataset.correlate;
+    try {
+      const data = await api(`/v1/graph/correlations/${sha}?mode=entity&limit=8`);
+      const out = document.createElement("div");
+      out.className = "related-list";
+      out.innerHTML =
+        (data.results || [])
+          .map(
+            (row) => `<p><a href="/d/${escapeHtml(row.sha)}">${escapeHtml(row.title || row.sha.slice(0, 12))}</a>
+              <span class="meta">shared ${escapeHtml(row.evidence_entities || "")}</span></p>`,
+          )
+          .join("") || `<p class="meta">No other records share these names.</p>`;
+      correlate.replaceWith(out);
+    } catch (err) {
+      correlate.textContent = err.message;
+    }
   });
   $("#graph-mode")?.addEventListener("change", () => {
-    state.selectedEntity = null;
+    if ($("#graph-mode").value !== "neighborhood") state.selectedEntity = null;
     loadGraph();
   });
   $("#graph-relation")?.addEventListener("change", () => loadGraph());
-  $("#graph-refresh")?.addEventListener("click", () => loadGraph());
   $("#graph-path-run")?.addEventListener("click", () => runPathFind());
-  $("#graph-detail").addEventListener("click", async (e) => {
-    const correlate = e.target.closest("[data-correlate]");
-    const spatial = e.target.closest("[data-spatial]");
-    const button = correlate || spatial;
+  $("#catalog-viz")?.addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-collection]");
+    if (!chip) return;
+    const filter = $("#collection-filter");
+    if (filter) filter.value = chip.dataset.collection;
+    $("#q")?.focus();
+  });
+  $("#source-list")?.addEventListener("click", (e) => {
+    const button = e.target.closest("[data-open-collection]");
     if (!button) return;
-    const mode = spatial ? "spatial" : "entity";
-    const sha = button.dataset.correlate || button.dataset.spatial;
-    try {
-      const data = await api(`/v1/graph/correlations/${sha}?mode=${mode}`);
-      const out = document.createElement("div");
-      if (mode === "spatial") {
-        out.innerHTML =
-          (data.results || [])
-            .map(
-              (x) =>
-                `<p>${escapeHtml(x.title || x.sha)} · ${x.distance_km} km · score ${Number(x.score).toFixed(3)} · <button type="button" class="linkish open-doc" data-sha="${escapeHtml(x.sha)}">open</button></p>`,
-            )
-            .join("") ||
-          data.note ||
-          "No nearby geo documents.";
-      } else {
-        out.innerHTML =
-          (data.results || [])
-            .map(
-              (x) =>
-                `<p>${escapeHtml(x.title)} · shared: ${escapeHtml(x.evidence_entities)} · score ${Number(x.score).toFixed(3)} · <button type="button" class="linkish open-doc" data-sha="${escapeHtml(x.sha)}">open</button></p>`,
-            )
-            .join("") || "No shared-entity correlations yet.";
-      }
-      button.replaceWith(out);
-      bindDocButtons(out);
-    } catch (err) {
-      button.textContent = err.message;
-    }
+    const sel = $("#browse-collection");
+    if (sel) sel.value = button.dataset.openCollection;
+    state.browseOffset = 0;
+    showView("browse");
+  });
+  document.body.addEventListener("click", (e) => {
+    const button = e.target.closest(".analyze-doc");
+    if (!button) return;
+    const status = $("#view-browse")?.classList.contains("is-active") ? $("#browse-status") : $("#search-status");
+    traceDocument(button.dataset.sha, status);
   });
   $("#gallery-refresh").addEventListener("click", loadGallery);
   $("#auth-form").addEventListener("submit", authLogin);
@@ -1446,3 +1656,5 @@ setInterval(() => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") refreshMeta();
 });
+window.addEventListener("hashchange", applyHash);
+applyHash();

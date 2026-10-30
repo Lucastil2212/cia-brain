@@ -511,7 +511,9 @@ class KnowledgeGraph:
                 dict(r) | {"inferred": True}
                 for r in db.execute(
                     f"""
-                SELECT x.*, a.label AS subject_label,b.label AS object_label,d.url,d.title
+                SELECT x.*, a.label AS subject_label, b.label AS object_label,
+                       a.kind AS subject_kind, b.kind AS object_kind,
+                       d.url, d.title, d.fetched_at, d.source_id
                 FROM edges x JOIN entities a ON a.id=x.subject JOIN entities b ON b.id=x.object
                 JOIN documents d ON d.sha=x.sha
                 WHERE d.active=1 AND (x.subject=? OR x.object=?)
@@ -731,15 +733,34 @@ class KnowledgeGraph:
                 params.append(relation)
             link_rows = db.execute(
                 f"""
-                SELECT x.subject, x.object, x.relation, count(*) AS weight,
-                       min(a.label) AS subject_label, min(b.label) AS object_label
-                FROM edges x
-                JOIN entities a ON a.id=x.subject
-                JOIN entities b ON b.id=x.object
-                JOIN documents d ON d.sha=x.sha
-                WHERE d.active=1 AND x.subject IN ({placeholders})
-                  AND x.object IN ({placeholders}){rel_clause}
-                GROUP BY x.subject, x.object, x.relation
+                WITH scoped AS (
+                  SELECT x.subject, x.object, x.relation, x.evidence, x.sha,
+                         d.url, d.title, d.fetched_at, d.source_id,
+                         a.label AS subject_label, b.label AS object_label,
+                         a.kind AS subject_kind, b.kind AS object_kind
+                  FROM edges x
+                  JOIN entities a ON a.id=x.subject
+                  JOIN entities b ON b.id=x.object
+                  JOIN documents d ON d.sha=x.sha
+                  WHERE d.active=1 AND x.subject IN ({placeholders})
+                    AND x.object IN ({placeholders}){rel_clause}
+                ),
+                ranked AS (
+                  SELECT *,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY subject, object, relation
+                           ORDER BY fetched_at DESC
+                         ) AS rn,
+                         COUNT(*) OVER (
+                           PARTITION BY subject, object, relation
+                         ) AS weight
+                  FROM scoped
+                )
+                SELECT subject, object, relation, weight, subject_label, object_label,
+                       subject_kind, object_kind, sha, url, title, evidence,
+                       fetched_at, source_id
+                FROM ranked
+                WHERE rn = 1
                 ORDER BY weight DESC
                 LIMIT 400
                 """,
@@ -747,12 +768,20 @@ class KnowledgeGraph:
             ).fetchall()
             links = [
                 {
-                    "source": r[0],
-                    "target": r[1],
-                    "relation": r[2],
-                    "weight": r[3],
-                    "subject_label": r[4],
-                    "object_label": r[5],
+                    "source": r["subject"],
+                    "target": r["object"],
+                    "relation": r["relation"],
+                    "weight": r["weight"],
+                    "subject_label": r["subject_label"],
+                    "object_label": r["object_label"],
+                    "subject_kind": r["subject_kind"],
+                    "object_kind": r["object_kind"],
+                    "sha": r["sha"],
+                    "url": r["url"],
+                    "title": r["title"],
+                    "evidence": r["evidence"],
+                    "fetched_at": r["fetched_at"],
+                    "source_id": r["source_id"],
                 }
                 for r in link_rows
             ]
@@ -868,6 +897,39 @@ class KnowledgeGraph:
                     (entity, entity),
                 )
             ]
+            counts = db.execute(
+                """
+                SELECT count(*) AS mentions,
+                       count(DISTINCT m.sha) AS documents,
+                       avg(m.confidence) AS confidence
+                FROM mentions m JOIN documents d ON d.sha=m.sha
+                WHERE m.entity=? AND d.active=1
+                """,
+                (entity,),
+            ).fetchone()
+            sources = [
+                {
+                    "sha": r["sha"],
+                    "url": r["url"],
+                    "title": r["title"],
+                    "fetched_at": r["fetched_at"],
+                    "source_id": r["source_id"],
+                    "mentions": r["mentions"],
+                    "confidence": round(r["confidence"], 3) if r["confidence"] is not None else None,
+                }
+                for r in db.execute(
+                    """
+                    SELECT d.sha, d.url, d.title, d.fetched_at, d.source_id,
+                           count(*) AS mentions, avg(m.confidence) AS confidence
+                    FROM mentions m JOIN documents d ON d.sha=m.sha
+                    WHERE m.entity=? AND d.active=1
+                    GROUP BY d.sha
+                    ORDER BY d.fetched_at DESC
+                    LIMIT 12
+                    """,
+                    (entity,),
+                )
+            ]
             neighbors = [
                 {
                     "id": r[0],
@@ -890,11 +952,16 @@ class KnowledgeGraph:
                     (entity, entity, entity),
                 )
             ]
+            confidence = counts["confidence"] if counts else None
             return {
                 "id": row[0],
                 "label": row[1],
                 "kind": row[2],
                 "degree": degree,
+                "documents": int(counts["documents"] or 0) if counts else 0,
+                "mentions": int(counts["mentions"] or 0) if counts else 0,
+                "confidence": round(confidence, 3) if confidence is not None else None,
                 "relations": relations,
                 "neighbors": neighbors,
+                "sources": sources,
             }
